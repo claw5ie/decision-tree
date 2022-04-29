@@ -14,26 +14,12 @@ struct Tokenizer
       INTEGER,
       DOUBLE,
       IDENTIFIER,
-
-      COMMA,
-      NEWLINE,
-
       END_OF_FILE
     };
 
     Type type;
     const char *text;
     uint32_t size;
-
-    void assert_type(Type type) const
-    {
-      if (this->type != type)
-      {
-        std::cerr << "ERROR: expected type \"" << type << "\", but got \"" <<
-          this->type << "\".\n";
-        exit(EXIT_FAILURE);
-      }
-    }
 
     int32_t to_integer() const
     {
@@ -73,21 +59,13 @@ struct Tokenizer
     while (std::isspace(*at))
       at++;
 
+    at += (*at == ',' || *at == '\n');
+
     const char *begin = at;
 
     if (*at == '\0')
     {
       return { Token::END_OF_FILE, begin, 0 };
-    }
-    else if (*at == ',')
-    {
-      at++;
-      return { Token::COMMA, begin, 1 };
-    }
-    else if (*at == '\n')
-    {
-      at++;
-      return { Token::NEWLINE, begin, 1 };
     }
     else if (std::isdigit(*at) ||
              ((*at == '-' || *at == '+') && std::isdigit(at[1])))
@@ -130,14 +108,32 @@ struct Table
   {
     std::string name;
     std::map<std::string, uint32_t> values;
+#ifndef NDEBUG
+    std::map<uint32_t, std::string> names;
+#endif
 
     uint32_t insert(const char *string, uint32_t size)
     {
+#ifndef NDEBUG
+      auto it = values.insert(
+        std::pair<std::string, uint32_t>(
+          std::string(string, size), values.size()
+          )
+        );
+      names.insert(
+        std::pair<uint32_t, std::string>(
+          it.first->second, std::string(string, size)
+          )
+        );
+
+      return it.first->second;
+#else
       return values.insert(
         std::pair<std::string, uint32_t>(
           std::string(string, size), values.size()
           )
         ).first->second;
+#endif
     }
   };
 
@@ -153,9 +149,7 @@ struct Table
     union
     {
       uint32_t attribute;
-
       int32_t int32;
-
       double decimal;
     } as;
   };
@@ -191,102 +185,125 @@ struct Table
     return data[row * cols + col];
   }
 
+  void print() const
+  {
+    for (size_t i = 0; i < cols; i++)
+      std::cout << categories[i].name << (i + 1 < cols ? ' ' : '\n');
+
+    for (size_t i = 0; i < rows; i++)
+    {
+      for (size_t j = 0; j < cols; j++)
+      {
+        switch (types[j])
+        {
+        case AttributeType::INT32:
+          std::cout << get(i, j).as.int32;
+          break;
+        case AttributeType::DOUBLE:
+          std::cout << get(i, j).as.decimal;
+          break;
+        case AttributeType::ATTRIBUTE:
+#ifndef NDEBUG
+        {
+          auto it = categories[j].names.find(get(i, j).as.attribute);
+          std::cout << it->second;
+          break;
+        }
+#else
+        std::cout << get(i, j).as.attribute;
+        break;
+#endif
+        default:
+          assert(false);
+        }
+
+        std::cout << (j + 1 < cols ? ' ' : '\n');
+      }
+    }
+  }
+
   void deallocate()
   {
+    for (size_t i = 0; i < cols; i++)
+      categories[i].~Category();
+
     delete[] raw_data;
   }
 };
 
-void parse_table(Table &table, const char *data)
-{
-  assert(table.cols >= 2 && table.rows > 1);
-
-  Tokenizer tokenizer = { data };
-
-  for (size_t i = 0; i < table.cols; i++)
-  {
-    Tokenizer::Token token = tokenizer.next_token();
-
-    token.assert_type(Tokenizer::Token::IDENTIFIER);
-
-    table.categories[i].insert(token.text, token.size);
-  }
-
-  for (size_t i = 0; i < table.cols; i++)
-  {
-    Tokenizer::Token token = tokenizer.next_token();
-
-    switch (token.type)
-    {
-    case Tokenizer::Token::INTEGER:
-      table.types[i] = Table::AttributeType::INT32;
-      table.get(0, i).as.int32 = token.to_integer();
-      break;
-    case Tokenizer::Token::DOUBLE:
-      table.types[i] = Table::AttributeType::DOUBLE;
-      table.get(0, i).as.decimal = token.to_double();
-      break;
-    case Tokenizer::Token::IDENTIFIER:
-    {
-      new (&table.categories[i]) Table::Category;
-      uint32_t value = table.categories[i].insert(token.text, token.size);
-      table.types[i] = Table::AttributeType::ATTRIBUTE;
-      table.get(0, i).as.attribute = value;
-      break;
-    }
-    default:
-      assert(false);
-    }
-
-    token = tokenizer.next_token();
-
-    assert(
-      token.type == Tokenizer::Token::COMMA ||
-      token.type == Tokenizer::Token::NEWLINE ||
-      token.type == Tokenizer::Token::END_OF_FILE
-      );
-  }
-
-  for (size_t i = 2; i < table.rows; i++)
-  {
-    for (size_t j = 0; j < table.cols; j++)
-    {
-      Tokenizer::Token token = tokenizer.next_token();
-
-      switch (token.type)
-      {
-      case Tokenizer::Token::INTEGER:
-        assert(table.types[j] == Table::AttributeType::INT32);
-        table.get(0, i).as.int32 = token.to_integer();
-        break;
-      case Tokenizer::Token::DOUBLE:
-        assert(table.types[j] == Table::AttributeType::DOUBLE);
-        table.get(0, i).as.decimal = token.to_double();
-        break;
-      case Tokenizer::Token::IDENTIFIER:
-      {
-        assert(table.types[j] == Table::AttributeType::ATTRIBUTE);
-        uint32_t value = table.categories[i].insert(token.text, token.size);
-        table.get(0, i).as.attribute = value;
-        break;
-      }
-      default:
-        assert(false);
-      }
-
-      token = tokenizer.next_token();
-
-      assert(
-        token.type == Tokenizer::Token::COMMA ||
-        token.type == Tokenizer::Token::NEWLINE ||
-        token.type == Tokenizer::Token::END_OF_FILE
-        );
-    }
-  }
-}
-
 Table read_csv(const char *const filepath)
 {
+  const auto parse_table =
+    [](Table &table, const char *data) -> void
+    {
+      assert(table.cols >= 2 && table.rows > 0);
+
+      Tokenizer tokenizer = { data };
+
+      for (size_t i = 0; i < table.cols; i++)
+      {
+        Tokenizer::Token token = tokenizer.next_token();
+
+        assert(token.type != Tokenizer::Token::END_OF_FILE);
+
+        new (&table.categories[i]) Table::Category;
+        table.categories[i].name = std::string(token.text, token.size);
+      }
+
+      for (size_t i = 0; i < table.cols; i++)
+      {
+        Tokenizer::Token token = tokenizer.next_token();
+
+        switch (token.type)
+        {
+        case Tokenizer::Token::INTEGER:
+          table.types[i] = Table::AttributeType::INT32;
+          table.get(0, i).as.int32 = token.to_integer();
+          break;
+        case Tokenizer::Token::DOUBLE:
+          table.types[i] = Table::AttributeType::DOUBLE;
+          table.get(0, i).as.decimal = token.to_double();
+          break;
+        case Tokenizer::Token::IDENTIFIER:
+          table.types[i] = Table::AttributeType::ATTRIBUTE;
+          table.get(0, i).as.attribute =
+            table.categories[i].insert(token.text, token.size);;
+          break;
+        default:
+          assert(false);
+        }
+      }
+
+      for (size_t i = 1; i < table.rows; i++)
+      {
+        for (size_t j = 0; j < table.cols; j++)
+        {
+          Tokenizer::Token token = tokenizer.next_token();
+
+          switch (token.type)
+          {
+          case Tokenizer::Token::INTEGER:
+            assert(table.types[j] == Table::AttributeType::INT32);
+            table.get(i, j).as.int32 = token.to_integer();
+            break;
+          case Tokenizer::Token::DOUBLE:
+            assert(table.types[j] == Table::AttributeType::DOUBLE);
+            table.get(i, j).as.decimal = token.to_double();
+            break;
+          case Tokenizer::Token::IDENTIFIER:
+          {
+            assert(table.types[j] == Table::AttributeType::ATTRIBUTE);
+            uint32_t value = table.categories[j].insert(token.text, token.size);
+            table.get(i, j).as.attribute = value;
+            break;
+          }
+          default:
+            assert(false);
+          }
+        }
+      }
+    };
+
   const size_t file_size =
     [filepath]() -> size_t
     {
@@ -320,29 +337,30 @@ Table read_csv(const char *const filepath)
     cols = 1;
 
   {
-    bool column_set = false;
+    size_t i = 0;
 
-    for (size_t i = 0; i < file_size; i++)
-    {
-      if (!column_set && file_data[i] == '\n')
-        column_set = true;
-      else
-        cols += file_data[i] == ',';
+    for (; file_data[i] != '\n' && i < file_size; i++)
+      cols += file_data[i] == ',';
 
+    for (; i < file_size; i++)
       rows += file_data[i] == '\n';
-    }
+
+    rows += i > 0 && file_data[i - 1] != '\n' && file_data[i] == '\0';
   }
 
   table.allocate(rows - 1, cols);
-
   parse_table(table, file_data);
 
   delete[] file_data;
 
-  return Table{ };
+  return table;
 }
 
-int main(int, char **)
+int main(int argc, char **argv)
 {
+  assert(argc == 2);
 
+  Table table = read_csv(argv[1]);
+
+  table.print();
 }

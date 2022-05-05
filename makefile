@@ -1,11 +1,11 @@
 WFLAGS=-Wall -Wextra -pedantic
 OFLAGS=-std=c++11 -g
-OUTPUT=classify.out
+OUTPUT=main.out
 
 all: debug_build
 
-debug_build: ./main.cpp ./src/Table.cpp
+debug_build: ./main.cpp
 	g++ $(WFLAGS) $(OFLAGS) -o $(OUTPUT) $^
 
-release_build: ./main.cpp ./src/Table.cpp
+release_build: ./main.cpp
 	g++ -O3 -D NDEBUG -o $(OUTPUT) $^

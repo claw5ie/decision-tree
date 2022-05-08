@@ -121,7 +121,7 @@ struct Table
     }
   }
 
-  void deallocate()
+  void clean()
   {
     for (size_t i = 0; i < cols; i++)
     {
@@ -303,6 +303,10 @@ Table read_csv(const char *filepath)
       }
     };
 
+  // Could loop one time and initialize all columns, but requires copy-pasting
+  // some code. Probably not worth it, although this will eliminate the need in
+  // "is_initialized" variable. Also, making redundant checks each time, even
+  // though the "else" statement will only be executed once is kinda meh...
   for (size_t j = 0; j < table.rows; j++)
   {
     for (size_t i = 0; i < table.cols; i++)
@@ -368,7 +372,7 @@ Table read_csv(const char *filepath)
 #define INTEGER_CATEGORY_LIMIT 7
 #define BINS_COUNT 4
 
-double compute_entropy(
+double compute_info_gain(
   const Table::Attribute &attr,
   const Table::Attribute &goal,
   size_t table_rows
@@ -517,22 +521,32 @@ double compute_entropy(
   Category discr_attr = Category::discretize(attr, table_rows);
   Category discr_goal = Category::discretize(goal, table_rows);
 
-  size_t const rows = discr_attr.count();
+  size_t const rows = discr_attr.count() + 1;
   size_t const cols = discr_goal.count() + 1;
   size_t *const samples = new size_t[rows * cols]{ };
 
   for (size_t i = 0; i < table_rows; i++)
   {
     size_t const offset =
-      discr_attr.to_category(attr.get(i)) * cols;
+      discr_attr.to_category(attr.get(i)) * cols + cols;
+    size_t const column = discr_goal.to_category(goal.get(i)) + 1;
 
-    samples[offset + 1 + discr_goal.to_category(goal.get(i))]++;
+    samples[offset + column]++;
     samples[offset]++;
+    samples[column]++;
   }
 
-  double mean_entropy = 0;
+  double info_gain = 0;
 
-  for (size_t i = 0; i < rows; i++)
+  for (size_t i = 1; i < cols; i++)
+  {
+    double const prob = (double)samples[i] / table_rows;
+
+    if (prob != 0)
+      info_gain -= prob * log(prob) / log(2);
+  }
+
+  for (size_t i = 1; i < rows; i++)
   {
     size_t const offset = i * cols;
     size_t const sample_size = samples[offset];
@@ -546,14 +560,14 @@ double compute_entropy(
         entropy += count * log(count / sample_size) / log(2);
     }
 
-    mean_entropy += -entropy / table_rows;
+    info_gain += entropy / table_rows;
   }
 
   delete[] samples;
   discr_attr.clean();
   discr_goal.clean();
 
-  return mean_entropy;
+  return info_gain;
 }
 
 int main(int argc, char **argv)
@@ -564,12 +578,12 @@ int main(int argc, char **argv)
 
   for (size_t i = 0; i + 1 < table.cols; i++)
   {
-    double val = compute_entropy(
+    double val = compute_info_gain(
       table.columns[i], table.columns[table.cols - 1], table.rows
       );
     std::cout << "entropy of column " << i << ":\n  " << val << "\n";
   }
 
   table.print();
-  table.deallocate();
+  table.clean();
 }

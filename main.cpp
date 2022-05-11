@@ -41,6 +41,8 @@ struct Table
       DECIMAL
     };
 
+    Type type;
+
     union
     {
       struct
@@ -61,7 +63,6 @@ struct Table
       double *doubles;
     } as;
 
-    Type type;
     std::string name;
     bool is_initialized;
 

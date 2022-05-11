@@ -543,7 +543,7 @@ double compute_info_gain(
     double const prob = (double)samples[i] / table_rows;
 
     if (prob != 0)
-      info_gain -= prob * log(prob) / log(2);
+      info_gain -= prob * std::log(prob) / std::log(2);
   }
 
   for (size_t i = 1; i < rows; i++)
@@ -557,7 +557,7 @@ double compute_info_gain(
       double const count = (double)samples[offset + j];
 
       if (count != 0)
-        entropy += count * log(count / sample_size) / log(2);
+        entropy += count * std::log(count / sample_size) / std::log(2);
     }
 
     info_gain += entropy / table_rows;

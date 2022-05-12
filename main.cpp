@@ -373,152 +373,153 @@ Table read_csv(const char *filepath)
 #define INTEGER_CATEGORY_LIMIT 7
 #define BINS_COUNT 4
 
+struct Category
+{
+  static double bins[BINS_COUNT];
+  Table::Attribute::Type type;
+
+  union
+  {
+    struct
+    {
+      size_t count;
+    } category;
+
+    struct
+    {
+      std::map<int32_t, uint32_t> *values;
+      int32_t min;
+      int32_t max;
+    } integer;
+
+    struct
+    {
+      double min;
+      double max;
+    } decimal;
+  } as;
+
+  static Category discretize(const Table::Attribute &attr, size_t count)
+  {
+    Category res;
+
+    res.type = attr.type;
+
+    switch (attr.type)
+    {
+    case Table::Attribute::CATEGORY:
+      res.as.category.count = attr.as.category.names->size();
+      break;
+    case Table::Attribute::INTEGER:
+    {
+      auto &integer = res.as.integer;
+      integer.values = new std::map<int32_t, uint32_t>;
+      integer.min = std::numeric_limits<int32_t>::max();
+      integer.max = std::numeric_limits<int32_t>::lowest();
+
+      for (size_t i = 0; i < count; i++)
+      {
+        auto const value = attr.as.ints[i];
+
+        if (integer.values->size() < INTEGER_CATEGORY_LIMIT)
+          integer.values->emplace(value, integer.values->size());
+
+        integer.min = std::min(integer.min, value);
+        integer.max = std::max(integer.max, value);
+      }
+
+      if (integer.values->size() >= INTEGER_CATEGORY_LIMIT)
+      {
+        delete integer.values;
+        integer.values = nullptr;
+      }
+      else
+      {
+        double const interval_length =
+          (integer.max - integer.min) / (BINS_COUNT - 1);
+        for (size_t i = 0; i < BINS_COUNT; i++)
+          Category::bins[i] = integer.min + i * interval_length;
+      }
+    } break;
+    case Table::Attribute::DECIMAL:
+    {
+      auto &decimal = res.as.decimal;
+      decimal.min = std::numeric_limits<double>::max();
+      decimal.max = std::numeric_limits<double>::lowest();
+
+      for (size_t i = 0; i < count; i++)
+      {
+        auto const value = attr.as.doubles[i];
+
+        decimal.min = std::min(decimal.min, value);
+        decimal.max = std::max(decimal.max, value);
+      }
+
+      double const interval_length =
+        (decimal.max - decimal.min) / (BINS_COUNT - 1);
+      for (size_t i = 0; i < BINS_COUNT; i++)
+        Category::bins[i] = decimal.min + i * interval_length;
+    } break;
+    }
+
+    return res;
+  }
+
+  size_t to_category(Table::Attribute::Data value) const
+  {
+    switch (type)
+    {
+    case Table::Attribute::CATEGORY:
+      return value.category;
+    case Table::Attribute::INTEGER:
+      if (as.integer.values != nullptr)
+        return as.integer.values->find(value.integer)->second;
+      else
+        return binary_search_interval(value.integer, bins, BINS_COUNT);
+    case Table::Attribute::DECIMAL:
+      return binary_search_interval(value.decimal, bins, BINS_COUNT);
+    }
+
+    assert(false);
+
+    return 0;
+  }
+
+  size_t count() const
+  {
+    switch (type)
+    {
+    case Table::Attribute::CATEGORY:
+      return as.category.count;
+    case Table::Attribute::INTEGER:
+      if (as.integer.values != nullptr)
+        return as.integer.values->size();
+      else
+        return BINS_COUNT - 1;
+    case Table::Attribute::DECIMAL:
+      return BINS_COUNT - 1;
+    }
+
+    assert(false);
+
+    return 0;
+  }
+
+  void clean()
+  {
+    if (type == Table::Attribute::INTEGER)
+      delete as.integer.values;
+  }
+};
+
+double Category::bins[BINS_COUNT];
+
 double compute_info_gain(
   const Table::Attribute &attr,
   const Table::Attribute &goal,
   size_t table_rows
   )
 {
-  static double bins[BINS_COUNT];
-
-  struct Category
-  {
-    Table::Attribute::Type type;
-
-    union
-    {
-      struct
-      {
-        size_t count;
-      } category;
-
-      struct
-      {
-        std::map<int32_t, uint32_t> *values;
-        int32_t min;
-        int32_t max;
-      } integer;
-
-      struct
-      {
-        double min;
-        double max;
-      } decimal;
-    } as;
-
-    static Category discretize(const Table::Attribute &attr, size_t count)
-    {
-      Category res;
-
-      res.type = attr.type;
-
-      switch (attr.type)
-      {
-      case Table::Attribute::CATEGORY:
-        res.as.category.count = attr.as.category.names->size();
-        break;
-      case Table::Attribute::INTEGER:
-      {
-        auto &integer = res.as.integer;
-        integer.values = new std::map<int32_t, uint32_t>;
-        integer.min = std::numeric_limits<int32_t>::max();
-        integer.max = std::numeric_limits<int32_t>::lowest();
-
-        for (size_t i = 0; i < count; i++)
-        {
-          auto const value = attr.as.ints[i];
-
-          if (integer.values->size() < INTEGER_CATEGORY_LIMIT)
-            integer.values->emplace(value, integer.values->size());
-
-          integer.min = std::min(integer.min, value);
-          integer.max = std::max(integer.max, value);
-        }
-
-        if (integer.values->size() >= INTEGER_CATEGORY_LIMIT)
-        {
-          delete integer.values;
-          integer.values = nullptr;
-        }
-        else
-        {
-          double const interval_length =
-            (integer.max - integer.min) / (BINS_COUNT - 1);
-          for (size_t i = 0; i < BINS_COUNT; i++)
-            bins[i] = integer.min + i * interval_length;
-        }
-      } break;
-      case Table::Attribute::DECIMAL:
-      {
-        auto &decimal = res.as.decimal;
-        decimal.min = std::numeric_limits<double>::max();
-        decimal.max = std::numeric_limits<double>::lowest();
-
-        for (size_t i = 0; i < count; i++)
-        {
-          auto const value = attr.as.doubles[i];
-
-          decimal.min = std::min(decimal.min, value);
-          decimal.max = std::max(decimal.max, value);
-        }
-
-        double const interval_length =
-          (decimal.max - decimal.min) / (BINS_COUNT - 1);
-        for (size_t i = 0; i < BINS_COUNT; i++)
-          bins[i] = decimal.min + i * interval_length;
-      } break;
-      }
-
-      return res;
-    }
-
-    size_t to_category(Table::Attribute::Data value) const
-    {
-      switch (type)
-      {
-      case Table::Attribute::CATEGORY:
-        return value.category;
-      case Table::Attribute::INTEGER:
-        if (as.integer.values != nullptr)
-          return as.integer.values->find(value.integer)->second;
-        else
-          return binary_search_interval(value.integer, bins, BINS_COUNT);
-      case Table::Attribute::DECIMAL:
-        return binary_search_interval(value.decimal, bins, BINS_COUNT);
-      }
-
-      assert(false);
-
-      return 0;
-    }
-
-    size_t count() const
-    {
-      switch (type)
-      {
-      case Table::Attribute::CATEGORY:
-        return as.category.count;
-      case Table::Attribute::INTEGER:
-        if (as.integer.values != nullptr)
-          return as.integer.values->size();
-        else
-          return BINS_COUNT - 1;
-      case Table::Attribute::DECIMAL:
-        return BINS_COUNT - 1;
-      }
-
-      assert(false);
-
-      return 0;
-    }
-
-    void clean()
-    {
-      if (type == Table::Attribute::INTEGER)
-        delete as.integer.values;
-    }
-  };
-
   Category discr_attr = Category::discretize(attr, table_rows);
   Category discr_goal = Category::discretize(goal, table_rows);
 
@@ -570,6 +571,58 @@ double compute_info_gain(
 
   return info_gain;
 }
+
+struct DecisionTree
+{
+  struct Node
+  {
+    Node *children;
+    size_t count;
+  };
+
+  Category *categories;
+  std::string *names;
+  size_t count;
+
+  Node root;
+  size_t samples;
+
+  static DecisionTree construct(const Table &table)
+  {
+    DecisionTree tree;
+
+    tree.categories = new Category[table.cols];
+    tree.names = new std::string[table.cols];
+
+    for (size_t i = 0; i < table.cols; i++)
+    {
+      tree.categories[i] = Category::discretize(table.columns[i], table.rows);
+      tree.names[i] = table.columns[i].name;
+    }
+
+    return tree;
+  }
+
+  void clean()
+  {
+    for (size_t i = 0; i < count; i++)
+      categories[i].clean();
+
+    delete[] categories;
+    delete[] names;
+
+    clean(root);
+  }
+
+private:
+  void clean(Node &root)
+  {
+    for (size_t i = 0; i < root.count; i++)
+      clean(root.children[i]);
+
+    delete[] root.children;
+  }
+};
 
 int main(int argc, char **argv)
 {

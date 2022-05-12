@@ -6,6 +6,24 @@
 #include <cassert>
 #include <sys/stat.h>
 
+void *allocate_in_chunks(size_t *offsets, size_t count, ...)
+{
+  assert(count > 0);
+
+  va_list args;
+  va_start(args, count);
+
+  offsets[0] = va_arg(args, size_t);
+  for (size_t i = 1; i < count; i++)
+    offsets[i] = offsets[i - 1] + va_arg(args, size_t);
+
+  va_end(args);
+
+  char *const data = new char[offsets[count - 1]];
+
+  return (void *)data;
+}
+
 size_t binary_search_interval(
   double value, const double *array, size_t size
   )
@@ -514,17 +532,14 @@ struct Category
 };
 
 double compute_info_gain(
-  const Table::Attribute &attr,
-  const Table::Attribute &goal,
+  const Category &attr,
+  const Category &goal,
   size_t table_rows
   )
 {
-  Category discr_attr = Category::discretize(attr, table_rows);
-  Category discr_goal = Category::discretize(goal, table_rows);
-
-  size_t const rows = discr_attr.count() + 1;
-  size_t const cols = discr_goal.count() + 1;
-  size_t *const samples = new size_t[rows * cols]{ };
+  size_t const rows = attr.count();
+  size_t const cols = goal.count() + 1;
+  std::memset();
 
   for (size_t i = 0; i < table_rows; i++)
   {
@@ -564,30 +579,7 @@ double compute_info_gain(
     info_gain += entropy / table_rows;
   }
 
-  delete[] samples;
-  discr_attr.clean();
-  discr_goal.clean();
-
   return info_gain;
-}
-
-size_t max(const double *data, size_t count, double (*func)(double))
-{
-  double best_value = std::numeric_limits<double>::lowest();
-  size_t best_index = 0;
-  
-  for (size_t i = 0; i < count; i++)
-  {
-    double const value = func(data[i]);
-    
-    if (best_value < value)
-    {
-      best_value = value;
-      best_index = i;
-    }
-  }
-
-  return i;
 }
 
 struct DecisionTree
@@ -597,78 +589,64 @@ struct DecisionTree
     size_t column;
     Node *children;
     size_t count;
+    size_t samples;
   };
 
   Category *categories;
   std::string *names;
-  size_t count;
+  size_t attribute_count;
+  size_t goal_index;
 
   Node root;
-  size_t samples;
 
-  static DecisionTree construct(const Table &table)
+  void construct(const Table &table, size_t goal)
   {
-    DecisionTree tree;
+    categories = new Category[table.cols];
+    names = new std::string[table.cols];
+    attribute_count = table.cols;
+    goal_index = goal;
 
-    tree.categories = new Category[table.cols];
-    tree.names = new std::string[table.cols];
+    size_t max_rows_count = 0;
 
     for (size_t i = 0; i < table.cols; i++)
     {
-      tree.categories[i] = Category::discretize(table.columns[i], table.rows);
-      tree.names[i] = table.columns[i].name;
+      categories[i] = Category::discretize(table.columns[i], table.rows);
+      names[i] = table.columns[i].name;
+      max_rows_count =
+        std::max(max_rows_count, categories[i].count());
     }
+
+    max_rows_count++;
+    size_t const cols = categories[goal].count() + 1;
+    size_t const total_count = max_rows_count * cols;
+
+    size_t offsets[5];
+    void *const data = allocate_in_chunks(
+      offsets,
+      5,
+      cols * sizeof (size_t),
+      total_count * sizeof (size_t),
+      total_count * sizeof (size_t),
+      table.cols * sizeof (bool),
+      table.rows * sizeof (size_t);
+      );
+
+    construct({
+        &table,
+        &root,
+        { { data, data + offsets[0], data + offsets[1] }, 0 },
+        data + offsets[2],
+        data + offsets[3]
+      });
+
+    delete[] data;
 
     return tree;
   }
 
-  static void construct(
-    Node &root, size_t *used_cols, size_t cols, size_t *rows, size_t count
-    )
+  Data *parse_samples(cons char *samples) const
   {
-    double const entropy = compute_entropy_before_split();
-    double best_info_gain = std::numeric_limits<double>::lowest();
-    size_t best_attribute = size_t(-1);
-    
-    for (size_t i = 0; i < cols; i++)
-    {
-      if (!used_cols[i])
-      {
-        double const info_gain = entropy - compute_entropy_after_split();
-      
-        if (best_info_gain < info_gain)
-        {
-          best_info_gain = info_gain;
-          best_attribute = i;
-        }
-      }
-    }
-
-    // No columns to process.
-    if (best_attribute == size_t(-1))
-    {
-      // Incomplete.
-      return;
-    }
-
-    size_t const category_count = categories[best_attribute].count();
-
-    node.column = best_attribute;
-    node.children = new Node[category_count];
-    node.count = category_count;
-    
-    size_t *const offsets = new size_t[category_count + 1];
-
-    split();
-
-    used_cols[best_attribute] = true;
-    
-    for (size_t i = 0; i < category_count; i++)
-      construct(node.children[i], offsets[i], offsets[i + 1]);
-    
-    used_cols[best_attribute] = false;
-    
-    delete[] offsets;
+    return nullptr;
   }
 
   size_t classify(const Data *sample) const
@@ -689,14 +667,14 @@ struct DecisionTree
         std::cerr << "ERROR: cannot classify the sample: value at column "
                   << curr->column
                   << " doesn't fit into any category.\n";
-        
-        return size_t(-1);n
+
+        return size_t(-1);
       }
     }
 
     return curr->column;
   }
-  
+
   void clean()
   {
     for (size_t i = 0; i < count; i++)
@@ -709,6 +687,147 @@ struct DecisionTree
   }
 
 private:
+  struct EntropyData
+  {
+    const Table *table;
+    const Category *discr_goal;
+    const Attribute *goal;
+    size_t *samples;
+    struct
+    {
+      size_t *data;
+      size_t start;
+      size_t end;
+    } rows;
+  };
+
+  void compute_entropy_before_split(const EntropyData &data) const
+  {
+    std::memset(data.samples, data.discr_goal.count() * sizeof(size_t), 0);
+
+    for (size_t i = data.rows.start; i < data.rows.end; i++)
+      samples[discr_goal.to_category(goal.get(data.rows.data[i]))]++;
+
+    double entropy = 0;
+
+    for (size_t i = 0, cols = discr_goal.count(); i < cols; i++)
+    {
+      double const prob =
+        (double)data.samples[i] / (data.rows.end - data.rows.start);
+
+      if (prob != 0)
+        entropy -= prob * std::log(prob) / std::log(2);
+    }
+
+    return entropy;
+  }
+
+  void compute_entropy_after_split(const EntropyData &data, size_t attr_index) const
+  {
+
+    auto &attr = data.table->columns[attr_index];
+    auto &goal = data.table->columns[goal_index];
+
+    size_t const rows = discr_attr.count() + 1;
+    size_t const cols = discr_goal.count() + 1;
+
+    std::memset(data.samples + cols, rows * cols * sizeof(size_t), 0);
+
+    for (size_t i = data.rows.start; i < data.rows.end; i++)
+    {
+      size_t const row = data.rows.data[i];
+      size_t const offset =
+        discr_attr.to_category(attr.get(row)) * cols + cols;
+      size_t const column = discr_goal.to_category(goal.get(row)) + 1;
+
+      samples[offset + column]++;
+      samples[offset]++;
+    }
+
+    for (size_t i = 1; i < rows; i++)
+    {
+      size_t const offset = i * cols;
+      size_t const sample_size = samples[offset];
+      double entropy = 0;
+
+      for (size_t j = 1; j < cols; j++)
+      {
+        double const count = (double)samples[offset + j];
+
+        if (count != 0)
+          entropy += count * std::log(count / sample_size) / std::log(2);
+      }
+
+      info_gain += entropy / table_rows;
+    }
+
+    return -info_gain;
+  }
+
+  struct DecisionTreeData
+  {
+    const Table *table;
+    Node *node;
+    struct
+    {
+      size_t *header;
+      size_t *sections[2];
+      bool section;
+    } samples;
+    bool *used_columns;
+    size_t *rows;
+  };
+
+  void construct(const DecisionTreeData &data)
+  {
+    double const entropy = compute_entropy_before_split(
+
+      );
+    double best_info_gain = std::numeric_limits<double>::lowest();
+    size_t best_attribute = size_t(-1);
+
+    for (size_t i = 0; i < cols; i++)
+    {
+      if (!used_cols[i])
+      {
+        double const info_gain =
+          entropy - compute_entropy_after_split();
+
+        if (best_info_gain < info_gain)
+        {
+          best_info_gain = info_gain;
+          best_attribute = i;
+        }
+      }
+    }
+
+    // No columns to process.
+    if (best_attribute == size_t(-1))
+    {
+      // Incomplete.
+      return;
+    }
+
+    size_t const category_count = categories[best_attribute].count();
+
+    node.column = best_attribute;
+    node.children = new Node[category_count];
+    node.count = category_count;
+
+    size_t *const offsets = new size_t[category_count + 1];
+
+    split();
+
+    used_cols[best_attribute] = true;
+
+    for (size_t i = 0; i < category_count; i++)
+      construct(node.children[i], offsets[i], offsets[i + 1]);
+
+    used_cols[best_attribute] = false;
+
+    delete[] offsets;
+  }
+
   void clean(Node &root)
   {
     for (size_t i = 0; i < root.count; i++)

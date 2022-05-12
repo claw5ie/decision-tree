@@ -375,7 +375,6 @@ Table read_csv(const char *filepath)
 
 struct Category
 {
-  static double bins[BINS_COUNT];
   Table::Attribute::Type type;
 
   union
@@ -398,6 +397,8 @@ struct Category
       double max;
     } decimal;
   } as;
+
+  double bins[BINS_COUNT];
 
   static Category discretize(const Table::Attribute &attr, size_t count)
   {
@@ -438,7 +439,7 @@ struct Category
         double const interval_length =
           (integer.max - integer.min) / (BINS_COUNT - 1);
         for (size_t i = 0; i < BINS_COUNT; i++)
-          Category::bins[i] = integer.min + i * interval_length;
+          bins[i] = integer.min + i * interval_length;
       }
     } break;
     case Table::Attribute::DECIMAL:
@@ -458,7 +459,7 @@ struct Category
       double const interval_length =
         (decimal.max - decimal.min) / (BINS_COUNT - 1);
       for (size_t i = 0; i < BINS_COUNT; i++)
-        Category::bins[i] = decimal.min + i * interval_length;
+        bins[i] = decimal.min + i * interval_length;
     } break;
     }
 
@@ -511,8 +512,6 @@ struct Category
       delete as.integer.values;
   }
 };
-
-double Category::bins[BINS_COUNT];
 
 double compute_info_gain(
   const Table::Attribute &attr,
@@ -572,10 +571,30 @@ double compute_info_gain(
   return info_gain;
 }
 
+size_t max(const double *data, size_t count, double (*func)(double))
+{
+  double best_value = std::numeric_limits<double>::lowest();
+  size_t best_index = 0;
+  
+  for (size_t i = 0; i < count; i++)
+  {
+    double const value = func(data[i]);
+    
+    if (best_value < value)
+    {
+      best_value = value;
+      best_index = i;
+    }
+  }
+
+  return i;
+}
+
 struct DecisionTree
 {
   struct Node
   {
+    size_t column;
     Node *children;
     size_t count;
   };
@@ -603,6 +622,81 @@ struct DecisionTree
     return tree;
   }
 
+  static void construct(
+    Node &root, size_t *used_cols, size_t cols, size_t *rows, size_t count
+    )
+  {
+    double const entropy = compute_entropy_before_split();
+    double best_info_gain = std::numeric_limits<double>::lowest();
+    size_t best_attribute = size_t(-1);
+    
+    for (size_t i = 0; i < cols; i++)
+    {
+      if (!used_cols[i])
+      {
+        double const info_gain = entropy - compute_entropy_after_split();
+      
+        if (best_info_gain < info_gain)
+        {
+          best_info_gain = info_gain;
+          best_attribute = i;
+        }
+      }
+    }
+
+    // No columns to process.
+    if (best_attribute == size_t(-1))
+    {
+      // Incomplete.
+      return;
+    }
+
+    size_t const category_count = categories[best_attribute].count();
+
+    node.column = best_attribute;
+    node.children = new Node[category_count];
+    node.count = category_count;
+    
+    size_t *const offsets = new size_t[category_count + 1];
+
+    split();
+
+    used_cols[best_attribute] = true;
+    
+    for (size_t i = 0; i < category_count; i++)
+      construct(node.children[i], offsets[i], offsets[i + 1]);
+    
+    used_cols[best_attribute] = false;
+    
+    delete[] offsets;
+  }
+
+  size_t classify(const Data *sample) const
+  {
+    Node *curr = &root;
+
+    while (curr->children != nullptr)
+    {
+      size_t const category =
+        categories[curr->column].to_category(sample[curr->column]);
+
+      if (category < curr->count)
+      {
+        curr = curr->children + category;
+      }
+      else
+      {
+        std::cerr << "ERROR: cannot classify the sample: value at column "
+                  << curr->column
+                  << " doesn't fit into any category.\n";
+        
+        return size_t(-1);n
+      }
+    }
+
+    return curr->column;
+  }
+  
   void clean()
   {
     for (size_t i = 0; i < count; i++)

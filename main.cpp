@@ -479,6 +479,7 @@ struct Category
         max = std::max(max, value);
       }
 
+      decimal.bins = new double[BINS_COUNT];
       double const interval_length = (max - min) / (BINS_COUNT - 1);
       for (size_t i = 0; i < BINS_COUNT; i++, min += interval_length)
         decimal.bins[i] = min;

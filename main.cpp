@@ -822,7 +822,7 @@ private:
 
     {
       offsets[0] = start;
-      data.offsets[0] = data.rows[1] + start;
+      data.offsets[0] = data.rows[0] + start;
       for (size_t i = 0; i < category_count; i++)
       {
         offsets[i + 1] = offsets[i] + data.header[1][i];
@@ -832,9 +832,15 @@ private:
       const auto &discr_attr = categories[best_attribute];
       const auto &attr = data.table.columns[best_attribute];
 
+      std::memcpy(
+        data.rows[1] + start,
+        data.rows[0] + start,
+        (end - start) * sizeof (size_t)
+        );
+
       for (size_t i = start; i < end; i++)
       {
-        size_t const index = data.rows[0][i];
+        size_t const index = data.rows[1][i];
         size_t const category =
           discr_attr.to_category(attr.get(index));
 
@@ -842,8 +848,6 @@ private:
         **slot = index;
         ++*slot;
       }
-
-      std::swap(data.rows[0], data.rows[1]);
     }
 
     data.used_columns[best_attribute] = true;

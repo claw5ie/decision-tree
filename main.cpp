@@ -2,11 +2,15 @@
 #include <map>
 #include <string>
 #include <limits>
+
+#include <cstring>
 #include <cmath>
 #include <cassert>
+#include <cstdarg>
+
 #include <sys/stat.h>
 
-void *allocate_in_chunks(size_t *offsets, size_t count, ...)
+char *allocate_in_chunks(size_t *offsets, size_t count, ...)
 {
   assert(count > 0);
 
@@ -21,7 +25,7 @@ void *allocate_in_chunks(size_t *offsets, size_t count, ...)
 
   char *const data = new char[offsets[count - 1]];
 
-  return (void *)data;
+  return data;
 }
 
 size_t binary_search_interval(
@@ -59,6 +63,13 @@ struct Table
       DECIMAL
     };
 
+    union Data
+    {
+      uint32_t category;
+      int32_t integer;
+      double decimal;
+    };
+
     Type type;
 
     union
@@ -84,13 +95,6 @@ struct Table
     std::string name;
     bool is_initialized;
 
-    union Data
-    {
-      uint32_t category;
-      int32_t integer;
-      double decimal;
-    };
-
     Data get(size_t row) const
     {
       Data data;
@@ -115,29 +119,227 @@ struct Table
   size_t cols,
     rows;
 
-  void print()
+  static Table read_csv(const char *filepath)
   {
-    for (size_t i = 0; i < cols; i++)
-    {
-      auto &column = columns[i];
-      for (size_t j = 0; j < rows; j++)
+    size_t const file_size =
+      [filepath]() -> size_t
       {
-        switch (column.type)
+        struct stat stats;
+
+        if (stat(filepath, &stats) == -1)
         {
-        case Table::Attribute::CATEGORY:
-          std::cout << column.as.category.data[j];
-          break;
-        case Table::Attribute::INTEGER:
-          std::cout << column.as.ints[j];
-          break;
-        case Table::Attribute::DECIMAL:
-          std::cout << column.as.doubles[j];
-          break;
+          std::cerr << "ERROR: failed to stat the file `"
+                    << filepath
+                    << "`.\n";
+          exit(EXIT_FAILURE);
         }
 
-        std::cout << (j + 1 < rows ? ' ' : '\n');
+        return stats.st_size;
+      }();
+
+    FILE *const file = std::fopen(filepath, "r");
+
+    if (file == nullptr)
+    {
+      std::cerr << "ERROR: failed to open the file `" << filepath << "`.\n";
+      exit(EXIT_FAILURE);
+    }
+
+    char *const file_data = new char[file_size + 1];
+
+    if (std::fread(file_data, 1, file_size, file) < file_size)
+      std::cerr << "warning: couldn't read the entire file.\n";
+
+    file_data[file_size] = '\0';
+    std::fclose(file);
+
+    Table table;
+
+    table.rows = 0;
+    table.cols = 1;
+
+    {
+      const char *ch = file_data;
+
+      // Count columns.
+      while (*ch != '\n' && *ch != '\0')
+      {
+        table.cols += *ch == ',';
+        ch++;
+      }
+
+      // Count rows. First line is not counted.
+      while (*ch != '\0')
+      {
+        table.rows += *ch == '\n';
+        ch++;
       }
     }
+
+    auto const is_delimiter =
+      [](char ch) -> bool
+      {
+        return ch == ',' || ch == '\n' || ch == '\0';
+      };
+
+    auto const find_next_delimiter =
+      [&is_delimiter](const char *string) -> const char *
+      {
+        while (!is_delimiter(*string))
+          string++;
+
+        return string;
+      };
+
+    table.columns = new Table::Attribute[table.cols]{ };
+
+    const char *curr = file_data;
+
+    for (size_t i = 0; i < table.cols; i++)
+    {
+      const char *end = find_next_delimiter(curr);
+
+      assert(*end != '\0');
+      table.columns[i].name = std::string(curr, end);
+
+      curr = end + (*end != '\0');
+    }
+
+    struct Data
+    {
+      Table::Attribute::Type type;
+
+      union
+      {
+        struct
+        {
+          const char *text;
+          size_t size;
+        } string;
+
+        int32_t integer;
+
+        double decimal;
+      } as;
+    };
+
+    auto const parse_cell =
+      [&curr, &is_delimiter]() -> Data
+      {
+        if (std::isdigit(*curr) ||
+            ((*curr == '-' || *curr == '+') && std::isdigit(curr[1])))
+        {
+          curr += *curr == '+';
+          Data attr;
+          attr.type = Table::Attribute::INTEGER;
+          attr.as.integer = 0;
+
+          bool const should_be_negative = *curr == '-';
+          for (curr += should_be_negative; std::isdigit(*curr); curr++)
+            attr.as.integer = attr.as.integer * 10 + (*curr - '0');
+
+          if (curr[0] == '.' && std::isdigit(curr[1]))
+          {
+            double pow = 0.1;
+
+            attr.type = Table::Attribute::DECIMAL;
+            attr.as.decimal = (double)attr.as.integer;
+
+            for (++curr; std::isdigit(*curr); curr++, pow /= 10)
+              attr.as.decimal += (*curr - '0') * pow;
+
+            if (should_be_negative)
+              attr.as.decimal = -attr.as.decimal;
+
+            return attr;
+          }
+          else
+          {
+            if (should_be_negative)
+              attr.as.integer = -attr.as.integer;
+
+            return attr;
+          }
+        }
+        else
+        {
+          Data attr;
+          attr.type = Table::Attribute::CATEGORY;
+          attr.as.string.text = curr;
+
+          while (!is_delimiter(*curr))
+            curr++;
+
+          attr.as.string.size = curr - attr.as.string.text;
+
+          return attr;
+        }
+      };
+
+    // Could loop one time and initialize all columns, but requires copy-pasting
+    // some code. Probably not worth it, although this will eliminate the need in
+    // "is_initialized" variable. Also, making redundant checks each time, even
+    // though the "else" statement will only be executed once is kinda meh...
+    for (size_t j = 0; j < table.rows; j++)
+    {
+      for (size_t i = 0; i < table.cols; i++)
+      {
+        Data const value = parse_cell();
+
+        auto &column = table.columns[i];
+        if (column.is_initialized)
+        {
+          assert(column.type == value.type);
+
+          switch (column.type)
+          {
+          case Table::Attribute::CATEGORY:
+            column.as.category.insert(
+              j, value.as.string.text, value.as.string.size
+              );
+            break;
+          case Table::Attribute::INTEGER:
+            column.as.ints[j] = value.as.integer;
+            break;
+          case Table::Attribute::DECIMAL:
+            column.as.doubles[j] = value.as.decimal;
+            break;
+          }
+        }
+        else
+        {
+          column.type = value.type;
+          column.is_initialized = true;
+
+          switch (value.type)
+          {
+          case Table::Attribute::CATEGORY:
+            column.as.category.names =
+              new std::map<std::string, uint32_t>;
+            column.as.category.data = new uint32_t[table.rows];
+            column.as.category.insert(
+              0, value.as.string.text, value.as.string.size
+              );
+            break;
+          case Table::Attribute::INTEGER:
+            column.as.ints = new int32_t[table.rows];
+            column.as.ints[0] = value.as.integer;
+            break;
+          case Table::Attribute::DECIMAL:
+            column.as.doubles = new double[table.rows];
+            column.as.doubles[0] = value.as.decimal;
+            break;
+          }
+        }
+
+        assert(is_delimiter(*curr));
+        curr += *curr != '\0';
+      }
+    }
+
+    delete[] file_data;
+
+    return table;
   }
 
   void clean()
@@ -163,230 +365,35 @@ struct Table
 
     delete[] columns;
   }
-};
 
-Table read_csv(const char *filepath)
-{
-  size_t const file_size =
-    [filepath]() -> size_t
-    {
-      struct stat stats;
-
-      if (stat(filepath, &stats) == -1)
-      {
-        std::cerr << "ERROR: failed to stat the file `"
-                  << filepath
-                  << "`.\n";
-        exit(EXIT_FAILURE);
-      }
-
-      return stats.st_size;
-    }();
-
-  FILE *const file = std::fopen(filepath, "r");
-
-  if (file == nullptr)
+  void print() const
   {
-    std::cerr << "ERROR: failed to open the file `" << filepath << "`.\n";
-    exit(EXIT_FAILURE);
-  }
-
-  char *const file_data = new char[file_size + 1];
-
-  if (std::fread(file_data, 1, file_size, file) < file_size)
-    std::cerr << "warning: couldn't read the entire file.\n";
-
-  file_data[file_size] = '\0';
-  std::fclose(file);
-
-  Table table;
-
-  table.rows = 0;
-  table.cols = 1;
-
-  {
-    const char *ch = file_data;
-
-    // Count columns.
-    while (*ch != '\n' && *ch != '\0')
+    for (size_t i = 0; i < cols; i++)
     {
-      table.cols += *ch == ',';
-      ch++;
-    }
+      auto &column = columns[i];
 
-    // Count rows. First line is not counted.
-    while (*ch != '\0')
-    {
-      table.rows += *ch == '\n';
-      ch++;
-    }
-  }
+      std::cout << column.name << ", " << column.type << ": ";
 
-  auto const is_delimiter =
-    [](char ch) -> bool
-    {
-      return ch == ',' || ch == '\n' || ch == '\0';
-    };
-
-  auto const find_next_delimiter =
-    [&is_delimiter](const char *string) -> const char *
-    {
-      while (!is_delimiter(*string))
-        string++;
-
-      return string;
-    };
-
-  table.columns = new Table::Attribute[table.cols]{ };
-
-  const char *curr = file_data;
-
-  for (size_t i = 0; i < table.cols; i++)
-  {
-    const char *end = find_next_delimiter(curr);
-
-    assert(*end != '\0');
-    table.columns[i].name = std::string(curr, end);
-
-    curr = end + (*end != '\0');
-  }
-
-  struct Data
-  {
-    Table::Attribute::Type type;
-
-    union
-    {
-      struct
+      for (size_t j = 0; j < rows; j++)
       {
-        const char *text;
-        size_t size;
-      } string;
-
-      int32_t integer;
-
-      double decimal;
-    } as;
-  };
-
-  auto const parse_cell =
-    [&curr, &is_delimiter]() -> Data
-    {
-      if (std::isdigit(*curr) ||
-          ((*curr == '-' || *curr == '+') && std::isdigit(curr[1])))
-      {
-        curr += *curr == '+';
-        Data attr;
-        attr.type = Table::Attribute::INTEGER;
-        attr.as.integer = 0;
-
-        bool const should_be_negative = *curr == '-';
-        for (curr += should_be_negative; std::isdigit(*curr); curr++)
-          attr.as.integer = attr.as.integer * 10 + (*curr - '0');
-
-        if (*curr == '.' && std::isdigit(curr[1]))
-        {
-          double pow = 0.1;
-
-          attr.type = Table::Attribute::DECIMAL;
-          attr.as.decimal = (double)attr.as.integer;
-
-          for (++curr; std::isdigit(*curr); curr++, pow /= 10)
-            attr.as.decimal += (*curr - '0') * pow;
-
-          if (should_be_negative)
-            attr.as.decimal = -attr.as.decimal;
-
-          return attr;
-        }
-        else
-        {
-          if (should_be_negative)
-            attr.as.integer = -attr.as.integer;
-
-          return attr;
-        }
-      }
-      else
-      {
-        Data attr;
-        attr.type = Table::Attribute::CATEGORY;
-        attr.as.string.text = curr;
-
-        while (!is_delimiter(*curr))
-          curr++;
-
-        attr.as.string.size = curr - attr.as.string.text;
-
-        return attr;
-      }
-    };
-
-  // Could loop one time and initialize all columns, but requires copy-pasting
-  // some code. Probably not worth it, although this will eliminate the need in
-  // "is_initialized" variable. Also, making redundant checks each time, even
-  // though the "else" statement will only be executed once is kinda meh...
-  for (size_t j = 0; j < table.rows; j++)
-  {
-    for (size_t i = 0; i < table.cols; i++)
-    {
-      Data const value = parse_cell();
-
-      auto &column = table.columns[i];
-      if (column.is_initialized)
-      {
-        assert(column.type == value.type);
-
         switch (column.type)
         {
         case Table::Attribute::CATEGORY:
-          column.as.category.insert(
-            j, value.as.string.text, value.as.string.size
-            );
+          std::cout << column.as.category.data[j];
           break;
         case Table::Attribute::INTEGER:
-          column.as.ints[j] = value.as.integer;
+          std::cout << column.as.ints[j];
           break;
         case Table::Attribute::DECIMAL:
-          column.as.doubles[j] = value.as.decimal;
+          std::cout << column.as.doubles[j];
           break;
         }
-      }
-      else
-      {
-        column.type = value.type;
-        column.is_initialized = true;
 
-        switch (value.type)
-        {
-        case Table::Attribute::CATEGORY:
-          column.as.category.names =
-            new std::map<std::string, uint32_t>;
-          column.as.category.data = new uint32_t[table.rows];
-          column.as.category.insert(
-            0, value.as.string.text, value.as.string.size
-            );
-          break;
-        case Table::Attribute::INTEGER:
-          column.as.ints = new int32_t[table.rows];
-          column.as.ints[0] = value.as.integer;
-          break;
-        case Table::Attribute::DECIMAL:
-          column.as.doubles = new double[table.rows];
-          column.as.doubles[0] = value.as.decimal;
-          break;
-        }
+        std::cout << (j + 1 < rows ? ' ' : '\n');
       }
-
-      assert(is_delimiter(*curr));
-      curr += *curr != '\0';
     }
   }
-
-  delete[] file_data;
-
-  return table;
-}
+};
 
 #define INTEGER_CATEGORY_LIMIT 7
 #define BINS_COUNT 4
@@ -399,24 +406,17 @@ struct Category
   {
     struct
     {
-      size_t count;
-    } category;
-
-    struct
-    {
       std::map<int32_t, uint32_t> *values;
-      int32_t min;
-      int32_t max;
+      double *bins;
     } integer;
 
     struct
     {
-      double min;
-      double max;
+      double *bins;
     } decimal;
   } as;
 
-  double bins[BINS_COUNT];
+  size_t count;
 
   static Category discretize(const Table::Attribute &attr, size_t count)
   {
@@ -427,14 +427,15 @@ struct Category
     switch (attr.type)
     {
     case Table::Attribute::CATEGORY:
-      res.as.category.count = attr.as.category.names->size();
+      res.count = attr.as.category.names->size();
       break;
     case Table::Attribute::INTEGER:
     {
       auto &integer = res.as.integer;
       integer.values = new std::map<int32_t, uint32_t>;
-      integer.min = std::numeric_limits<int32_t>::max();
-      integer.max = std::numeric_limits<int32_t>::lowest();
+
+      int32_t min = std::numeric_limits<int32_t>::max();
+      int32_t max = std::numeric_limits<int32_t>::lowest();
 
       for (size_t i = 0; i < count; i++)
       {
@@ -443,45 +444,69 @@ struct Category
         if (integer.values->size() < INTEGER_CATEGORY_LIMIT)
           integer.values->emplace(value, integer.values->size());
 
-        integer.min = std::min(integer.min, value);
-        integer.max = std::max(integer.max, value);
+        min = std::min(min, value);
+        max = std::max(max, value);
       }
 
-      if (integer.values->size() >= INTEGER_CATEGORY_LIMIT)
+      res.count = integer.values->size();
+
+      if (res.count >= INTEGER_CATEGORY_LIMIT)
       {
         delete integer.values;
         integer.values = nullptr;
-      }
-      else
-      {
-        double const interval_length =
-          (integer.max - integer.min) / (BINS_COUNT - 1);
-        for (size_t i = 0; i < BINS_COUNT; i++)
-          bins[i] = integer.min + i * interval_length;
+
+        // NOTE: Rounding issues.
+        integer.bins = new double[BINS_COUNT];
+        double const interval_length = (max - min) / (BINS_COUNT - 1);
+        for (size_t i = 0; i < BINS_COUNT; i++, min += interval_length)
+          integer.bins[i] = min;
+
+        res.count = BINS_COUNT - 1;
       }
     } break;
     case Table::Attribute::DECIMAL:
     {
       auto &decimal = res.as.decimal;
-      decimal.min = std::numeric_limits<double>::max();
-      decimal.max = std::numeric_limits<double>::lowest();
+
+      double min = std::numeric_limits<double>::max();
+      double max = std::numeric_limits<double>::lowest();
 
       for (size_t i = 0; i < count; i++)
       {
         auto const value = attr.as.doubles[i];
 
-        decimal.min = std::min(decimal.min, value);
-        decimal.max = std::max(decimal.max, value);
+        min = std::min(min, value);
+        max = std::max(max, value);
       }
 
-      double const interval_length =
-        (decimal.max - decimal.min) / (BINS_COUNT - 1);
-      for (size_t i = 0; i < BINS_COUNT; i++)
-        bins[i] = decimal.min + i * interval_length;
+      double const interval_length = (max - min) / (BINS_COUNT - 1);
+      for (size_t i = 0; i < BINS_COUNT; i++, min += interval_length)
+        decimal.bins[i] = min;
+
+      res.count = BINS_COUNT - 1;
     } break;
     }
 
     return res;
+  }
+
+  void clean()
+  {
+    switch (type)
+    {
+    case Table::Attribute::CATEGORY:
+      return;
+    case Table::Attribute::INTEGER:
+      if (as.integer.values != nullptr)
+        delete as.integer.values;
+      else
+        delete[] as.integer.bins;
+
+      return;
+    case Table::Attribute::DECIMAL:
+      delete[] as.decimal.bins;
+      return;
+    }
   }
 
   size_t to_category(Table::Attribute::Data value) const
@@ -494,93 +519,16 @@ struct Category
       if (as.integer.values != nullptr)
         return as.integer.values->find(value.integer)->second;
       else
-        return binary_search_interval(value.integer, bins, BINS_COUNT);
+        return binary_search_interval(value.integer, as.integer.bins, count);
     case Table::Attribute::DECIMAL:
-      return binary_search_interval(value.decimal, bins, BINS_COUNT);
+      return binary_search_interval(value.decimal, as.integer.bins, count);
     }
 
     assert(false);
 
     return 0;
-  }
-
-  size_t count() const
-  {
-    switch (type)
-    {
-    case Table::Attribute::CATEGORY:
-      return as.category.count;
-    case Table::Attribute::INTEGER:
-      if (as.integer.values != nullptr)
-        return as.integer.values->size();
-      else
-        return BINS_COUNT - 1;
-    case Table::Attribute::DECIMAL:
-      return BINS_COUNT - 1;
-    }
-
-    assert(false);
-
-    return 0;
-  }
-
-  void clean()
-  {
-    if (type == Table::Attribute::INTEGER)
-      delete as.integer.values;
   }
 };
-
-double compute_info_gain(
-  const Category &attr,
-  const Category &goal,
-  size_t table_rows
-  )
-{
-  size_t const rows = attr.count();
-  size_t const cols = goal.count() + 1;
-  std::memset();
-
-  for (size_t i = 0; i < table_rows; i++)
-  {
-    size_t const offset =
-      discr_attr.to_category(attr.get(i)) * cols + cols;
-    size_t const column = discr_goal.to_category(goal.get(i)) + 1;
-
-    samples[offset + column]++;
-    samples[offset]++;
-    samples[column]++;
-  }
-
-  double info_gain = 0;
-
-  for (size_t i = 1; i < cols; i++)
-  {
-    double const prob = (double)samples[i] / table_rows;
-
-    if (prob != 0)
-      info_gain -= prob * std::log(prob) / std::log(2);
-  }
-
-  for (size_t i = 1; i < rows; i++)
-  {
-    size_t const offset = i * cols;
-    size_t const sample_size = samples[offset];
-    double entropy = 0;
-
-    for (size_t j = 1; j < cols; j++)
-    {
-      double const count = (double)samples[offset + j];
-
-      if (count != 0)
-        entropy += count * std::log(count / sample_size) / std::log(2);
-    }
-
-    info_gain += entropy / table_rows;
-  }
-
-  return info_gain;
-}
 
 struct DecisionTree
 {
@@ -613,71 +561,94 @@ struct DecisionTree
       categories[i] = Category::discretize(table.columns[i], table.rows);
       names[i] = table.columns[i].name;
       max_rows_count =
-        std::max(max_rows_count, categories[i].count());
+        std::max(max_rows_count, categories[i].count);
     }
 
-    max_rows_count++;
-    size_t const cols = categories[goal].count() + 1;
-    size_t const total_count = max_rows_count * cols;
+    size_t offsets[7];
 
-    size_t offsets[5];
-    void *const data = allocate_in_chunks(
+     char *const data = allocate_in_chunks(
       offsets,
-      5,
-      cols * sizeof (size_t),
-      total_count * sizeof (size_t),
-      total_count * sizeof (size_t),
+      7,
+      max_rows_count * sizeof (size_t),
+      max_rows_count * sizeof (size_t),
+      max_rows_count * categories[goal].count * sizeof (size_t),
       table.cols * sizeof (bool),
-      table.rows * sizeof (size_t);
+      table.rows * sizeof (size_t),
+      table.rows * sizeof (size_t),
+      (max_rows_count + 1) * sizeof (size_t *)
       );
 
-    construct({
-        &table,
-        &root,
-        { { data, data + offsets[0], data + offsets[1] }, 0 },
-        data + offsets[2],
-        data + offsets[3]
-      });
+    Data data_ = {
+      table,
+      categories[goal],
+      table.columns[goal],
+      { (size_t *)data, (size_t *)(data + offsets[0]) },
+      (size_t *)(data + offsets[1]),
+      (bool *)(data + offsets[2]),
+      { (size_t *)(data + offsets[3]), (size_t *)(data + offsets[4]) },
+      (size_t **)(data + offsets[5])
+    };
+
+    std::memset(data_.used_columns, 0, offsets[4] - offsets[3]);
+    data_.used_columns[goal] = true;
+
+    for (size_t i = 0; i < table.rows; i++)
+      data_.rows[0][i] = i;
+
+    construct(root, data_, 0, table.rows);
 
     delete[] data;
-
-    return tree;
   }
 
-  Data *parse_samples(cons char *samples) const
+  // Data *parse_samples(cons char *samples) const
+  // {
+  //   return nullptr;
+  // }
+
+  // size_t classify(const Samples *sample) const
+  // {
+  //   const Node *curr = &root;
+
+  //   while (curr->children != nullptr)
+  //   {
+  //     size_t const category =
+  //       categories[curr->column].to_category(sample[curr->column]);
+
+  //     if (category < curr->count)
+  //     {
+  //       curr = curr->children + category;
+  //     }
+  //     else
+  //     {
+  //       std::cerr << "ERROR: cannot classify the sample: value at column "
+  //                 << curr->column
+  //                 << " doesn't fit into any category.\n";
+
+  //       return size_t(-1);
+  //     }
+  //   }
+
+  //   return curr->column;
+  // }
+
+  void print(const Node &node, size_t offset) const
   {
-    return nullptr;
-  }
+    for (size_t i = 0; i < offset; i++)
+      std::cout << ' ';
 
-  size_t classify(const Data *sample) const
-  {
-    Node *curr = &root;
+    std::cout << "(column, samples): "
+              << node.column
+              << ", "
+              << node.samples
+              << '\n';
 
-    while (curr->children != nullptr)
-    {
-      size_t const category =
-        categories[curr->column].to_category(sample[curr->column]);
-
-      if (category < curr->count)
-      {
-        curr = curr->children + category;
-      }
-      else
-      {
-        std::cerr << "ERROR: cannot classify the sample: value at column "
-                  << curr->column
-                  << " doesn't fit into any category.\n";
-
-        return size_t(-1);
-      }
-    }
-
-    return curr->column;
+    for (size_t i = 0; i < node.count; i++)
+      print(node.children[i], offset + 2);
   }
 
   void clean()
   {
-    for (size_t i = 0; i < count; i++)
+    for (size_t i = 0; i < attribute_count; i++)
       categories[i].clean();
 
     delete[] categories;
@@ -687,143 +658,199 @@ struct DecisionTree
   }
 
 private:
-  struct EntropyData
+  struct Data
   {
-    const Table *table;
-    const Category *discr_goal;
-    const Attribute *goal;
+    const Table &table;
+
+    const Category &discr_goal;
+    const Table::Attribute &goal;
+
+    size_t *header[2];
     size_t *samples;
-    struct
-    {
-      size_t *data;
-      size_t start;
-      size_t end;
-    } rows;
+
+    bool *used_columns;
+
+    size_t *rows[2];
+    size_t **offsets;
   };
 
-  void compute_entropy_before_split(const EntropyData &data) const
+  double compute_entropy_after_split(
+    size_t attr_index, const Data &data, size_t start, size_t end
+    ) const
   {
-    std::memset(data.samples, data.discr_goal.count() * sizeof(size_t), 0);
+    const auto &discr_attr = categories[attr_index];
+    size_t const cols = data.discr_goal.count;
+    size_t const rows = discr_attr.count;
 
-    for (size_t i = data.rows.start; i < data.rows.end; i++)
-      samples[discr_goal.to_category(goal.get(data.rows.data[i]))]++;
+    std::memset(
+      data.header[0], 0, rows * sizeof (size_t)
+      );
+    std::memset(
+      data.samples, 0, cols * rows * sizeof (size_t)
+      );
 
-    double entropy = 0;
+    const auto &attr = data.table.columns[attr_index];
 
-    for (size_t i = 0, cols = discr_goal.count(); i < cols; i++)
+    for (size_t i = start; i < end; i++)
     {
-      double const prob =
-        (double)data.samples[i] / (data.rows.end - data.rows.start);
+      size_t const index = data.rows[0][i];
+      size_t const row =
+        discr_attr.to_category(attr.get(index));
+      size_t const column =
+        data.discr_goal.to_category(data.goal.get(index));
 
-      if (prob != 0)
-        entropy -= prob * std::log(prob) / std::log(2);
+      data.samples[row * cols + column]++;
+      data.header[0][row]++;
     }
 
-    return entropy;
-  }
+    size_t const samples_count = end - start;
+    double mean_entropy = 0;
 
-  void compute_entropy_after_split(const EntropyData &data, size_t attr_index) const
-  {
-
-    auto &attr = data.table->columns[attr_index];
-    auto &goal = data.table->columns[goal_index];
-
-    size_t const rows = discr_attr.count() + 1;
-    size_t const cols = discr_goal.count() + 1;
-
-    std::memset(data.samples + cols, rows * cols * sizeof(size_t), 0);
-
-    for (size_t i = data.rows.start; i < data.rows.end; i++)
+    for (size_t i = 0; i < rows; i++)
     {
-      size_t const row = data.rows.data[i];
-      size_t const offset =
-        discr_attr.to_category(attr.get(row)) * cols + cols;
-      size_t const column = discr_goal.to_category(goal.get(row)) + 1;
-
-      samples[offset + column]++;
-      samples[offset]++;
-    }
-
-    for (size_t i = 1; i < rows; i++)
-    {
+      size_t const samples_in_category = data.header[0][i];
       size_t const offset = i * cols;
-      size_t const sample_size = samples[offset];
       double entropy = 0;
 
-      for (size_t j = 1; j < cols; j++)
+      for (size_t j = 0; j < cols; j++)
       {
-        double const count = (double)samples[offset + j];
+        double const samples = (double)data.samples[offset + j];
 
-        if (count != 0)
-          entropy += count * std::log(count / sample_size) / std::log(2);
+        if (samples != 0)
+        {
+          entropy +=
+            samples * std::log(samples / samples_in_category) / std::log(2);
+        }
       }
 
-      info_gain += entropy / table_rows;
+      mean_entropy += entropy / samples_count;
     }
 
-    return -info_gain;
+    return -mean_entropy;
   }
 
-  struct DecisionTreeData
+  void construct(Node &node, Data &data, size_t start, size_t end)
   {
-    const Table *table;
-    Node *node;
-    struct
+    if (end - start <= 0)
     {
-      size_t *header;
-      size_t *sections[2];
-      bool section;
-    } samples;
-    bool *used_columns;
-    size_t *rows;
-  };
+      node = { size_t(-1), nullptr, 0, 0 };
 
-  void construct(const DecisionTreeData &data)
-  {
-    double const entropy = compute_entropy_before_split(
+      return;
+    }
 
-      );
-    double best_info_gain = std::numeric_limits<double>::lowest();
     size_t best_attribute = size_t(-1);
 
-    for (size_t i = 0; i < cols; i++)
     {
-      if (!used_cols[i])
-      {
-        double const info_gain =
-          entropy - compute_entropy_after_split();
+      double best_entropy = std::numeric_limits<double>::max();
 
-        if (best_info_gain < info_gain)
+      for (size_t i = 0; i < attribute_count; i++)
+      {
+        if (!data.used_columns[i])
         {
-          best_info_gain = info_gain;
-          best_attribute = i;
+          double const entropy =
+            compute_entropy_after_split(i, data, start, end);
+
+          if (best_entropy > entropy)
+          {
+            std::swap(data.header[0], data.header[1]);
+            best_entropy = entropy;
+            best_attribute = i;
+          }
         }
       }
     }
 
-    // No columns to process.
-    if (best_attribute == size_t(-1))
-    {
-      // Incomplete.
-      return;
-    }
+    size_t category_count = categories[best_attribute].count;
 
-    size_t const category_count = categories[best_attribute].count();
+    {
+      // Two remaining base cases.
+
+      // No columns to process.
+      if (best_attribute == size_t(-1))
+      {
+        size_t best_category = 0;
+
+        for (size_t i = start, best_samples_count = 0; i < end; i++)
+        {
+          size_t const index =
+            data.discr_goal.to_category(data.goal.get(data.rows[0][i]));
+
+          // Reusing header.
+          size_t const value = ++data.header[0][index];
+
+          if (best_samples_count < value)
+          {
+            best_samples_count = value;
+            best_category = index;
+          }
+        }
+
+        node = { best_category, nullptr, 0, end - start };
+
+        return;
+      }
+
+      // All samples are in one category.
+      {
+        uint8_t count = 0;
+        size_t best_attribute = 0;
+        for (size_t i = 0; i < category_count && count < 2; i++)
+        {
+          if (data.header[1][i] > 0)
+          {
+            count++;
+            best_attribute = i;
+          }
+        }
+
+        if (count == 1)
+        {
+          node = { best_attribute, nullptr, 0, data.header[1][best_attribute] };
+
+          return;
+        }
+      }
+    }
 
     node.column = best_attribute;
     node.children = new Node[category_count];
     node.count = category_count;
+    node.samples = end - start;
 
     size_t *const offsets = new size_t[category_count + 1];
 
-    split();
+    {
+      offsets[0] = start;
+      data.offsets[0] = data.rows[1] + start;
+      for (size_t i = 0; i < category_count; i++)
+      {
+        offsets[i + 1] = offsets[i] + data.header[1][i];
+        data.offsets[i + 1] = data.offsets[i] + data.header[1][i];
+      }
 
-    used_cols[best_attribute] = true;
+      const auto &discr_attr = categories[best_attribute];
+      const auto &attr = data.table.columns[best_attribute];
 
-    for (size_t i = 0; i < category_count; i++)
-      construct(node.children[i], offsets[i], offsets[i + 1]);
+      for (size_t i = start; i < end; i++)
+      {
+        size_t const index = data.rows[0][i];
+        size_t const category =
+          discr_attr.to_category(attr.get(index));
 
-    used_cols[best_attribute] = false;
+        auto **const slot = data.offsets + category;
+        **slot = index;
+        ++*slot;
+      }
+
+      std::swap(data.rows[0], data.rows[1]);
+    }
+
+    data.used_columns[best_attribute] = true;
+
+    for (size_t i = 0; i < node.count; i++)
+      construct(node.children[i], data, offsets[i], offsets[i + 1]);
+
+    data.used_columns[best_attribute] = false;
 
     delete[] offsets;
   }
@@ -841,16 +868,15 @@ int main(int argc, char **argv)
 {
   assert(argc == 2);
 
-  Table table = read_csv(argv[1]);
-
-  for (size_t i = 0; i + 1 < table.cols; i++)
-  {
-    double val = compute_info_gain(
-      table.columns[i], table.columns[table.cols - 1], table.rows
-      );
-    std::cout << "entropy of column " << i << ":\n  " << val << "\n";
-  }
+  Table table = Table::read_csv(argv[1]);
 
   table.print();
+
+  DecisionTree tree;
+
+  tree.construct(table, 0);
+  tree.print(tree.root, 0);
+
   table.clean();
+  tree.clean();
 }

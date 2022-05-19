@@ -548,7 +548,9 @@ struct DecisionTree
 
   Node root;
 
-  void construct(const Table &table, size_t goal)
+  void construct(
+    const Table &table, size_t goal, size_t *columns_to_exclude, size_t count
+    )
   {
     categories = new Category[table.cols];
     names = new std::string[table.cols];
@@ -592,6 +594,9 @@ struct DecisionTree
 
     std::memset(data_.used_columns, 0, offsets[4] - offsets[3]);
     data_.used_columns[goal] = true;
+
+    for (size_t i = 0; i < count; i++)
+      data_.used_columns[columns_to_exclude[i]] = true;
 
     for (size_t i = 0; i < table.rows; i++)
       data_.rows[0][i] = i;
@@ -876,11 +881,13 @@ int main(int argc, char **argv)
   Table table = Table::read_csv(argv[1]);
 
   table.print();
+  std::cout << '\n';
 
   DecisionTree tree;
 
-  tree.construct(table, 0);
-  tree.print(tree.root, 0);
+  size_t columns_to_exclude[1] = { 0 };
+  tree.construct(table, 0, columns_to_exclude, 1);
+  tree.print();
 
   table.clean();
   tree.clean();

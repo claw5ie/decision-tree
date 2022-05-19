@@ -10,6 +10,13 @@
 
 #include <sys/stat.h>
 
+static const char spaces[32] = {
+  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+  ' ', ' ', ' ', ' ', ' ', ' ', ' ', '\0'
+};
+
 char *allocate_in_chunks(size_t *offsets, size_t count, ...)
 {
   assert(count > 0);
@@ -637,19 +644,41 @@ struct DecisionTree
   //   return curr->column;
   // }
 
-  void print(const Node &node, size_t offset) const
+  void print() const
   {
-    for (size_t i = 0; i < offset; i++)
-      std::cout << ' ';
+    std::cout << "<" << names[root.column] << " (" << root.samples << ")>\n";
 
-    std::cout << "(column, samples): "
-              << node.column
-              << ", "
-              << node.samples
-              << '\n';
+    for (size_t i = 0; i < root.count; i++)
+      print(root.children[i], i, 2);
+  }
+
+  void print(const Node &node, size_t category, int offset) const
+  {
+    if (node.count != 0)
+    {
+      std::printf(
+        "%.*s%zu:\n", offset, spaces, category
+        );
+      std::printf("%.*s", offset + 2, spaces);
+      std::cout << '<' << names[node.column] << " (" << node.samples << ")>\n";
+
+      offset += 4;
+    }
+    else
+    {
+      std::printf(
+        "%.*s%zu: ", offset, spaces, category
+        );
+      std::cout << node.column
+                << " ("
+                << node.samples
+                << ")\n";
+
+      offset += 2;
+    }
 
     for (size_t i = 0; i < node.count; i++)
-      print(node.children[i], offset + 2);
+      print(node.children[i], i, offset);
   }
 
   void clean()

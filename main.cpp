@@ -520,9 +520,9 @@ struct Category
       if (as.integer.values != nullptr)
         return as.integer.values->find(value.integer)->second;
       else
-        return binary_search_interval(value.integer, as.integer.bins, count);
+        return binary_search_interval(value.integer, as.integer.bins, count + 1);
     case Table::Attribute::DECIMAL:
-      return binary_search_interval(value.decimal, as.integer.bins, count);
+      return binary_search_interval(value.decimal, as.decimal.bins, count + 1);
     }
 
     assert(false);

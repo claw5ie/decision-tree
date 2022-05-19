@@ -455,11 +455,11 @@ struct Category
         delete integer.values;
         integer.values = nullptr;
 
-        // NOTE: Rounding issues.
+        double val = min;
         integer.bins = new double[BINS_COUNT];
         double const interval_length = (max - min) / (BINS_COUNT - 1);
-        for (size_t i = 0; i < BINS_COUNT; i++, min += interval_length)
-          integer.bins[i] = min;
+        for (size_t i = 0; i < BINS_COUNT; i++, val += interval_length)
+          integer.bins[i] = val;
 
         res.count = BINS_COUNT - 1;
       }

@@ -990,12 +990,15 @@ private:
       {
         size_t best_category = 0;
 
+        // Reusing header.
+        std::memset(
+          data.theader, 0, categories[goal_index].count * sizeof (size_t)
+          );
+
         for (size_t i = start, best_samples_count = 0; i < end; i++)
         {
           size_t const index =
             data.discr_goal.to_category(data.goal.get(data.rows[i]));
-
-          // Reusing header.
           size_t const value = ++data.theader[index];
 
           if (best_samples_count < value)

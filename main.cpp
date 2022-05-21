@@ -10,13 +10,6 @@
 
 #include <sys/stat.h>
 
-static const char spaces[32] = {
-  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
-  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
-  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
-  ' ', ' ', ' ', ' ', ' ', ' ', ' ', '\0'
-};
-
 char *allocate_in_chunks(size_t *offsets, size_t count, ...)
 {
   assert(count > 0);
@@ -33,6 +26,12 @@ char *allocate_in_chunks(size_t *offsets, size_t count, ...)
   char *const data = new char[offsets[count - 1]];
 
   return data;
+}
+
+void putsn(const char *string, size_t count)
+{
+  while (count-- > 0)
+    std::fputs(string, stdout);
 }
 
 size_t binary_search_interval(
@@ -538,6 +537,8 @@ struct Category
   }
 };
 
+#define TAB_WIDTH 2
+
 struct DecisionTree
 {
   struct Node
@@ -649,36 +650,31 @@ struct DecisionTree
     std::cout << "<" << names[root.column] << " (" << root.samples << ")>\n";
 
     for (size_t i = 0; i < root.count; i++)
-      print(root.children[i], i, 2);
+      print(root.children[i], i, TAB_WIDTH);
   }
 
   void print(const Node &node, size_t category, int offset) const
   {
+    putsn(" ", offset);
+    std::cout << category << ':';
+
     if (node.count != 0)
     {
-      std::printf(
-        "%.*s%zu:\n", offset, spaces, category
-        );
-      std::printf("%.*s", offset + 2, spaces);
+      std::cout << '\n';
+      putsn(" ", offset + TAB_WIDTH);
       std::cout << '<' << names[node.column] << " (" << node.samples << ")>\n";
 
-      offset += 4;
+      for (size_t i = 0; i < node.count; i++)
+        print(node.children[i], i, offset + 2 * TAB_WIDTH);
     }
     else
     {
-      std::printf(
-        "%.*s%zu: ", offset, spaces, category
-        );
-      std::cout << node.column
+      std::cout << ' '
+                << node.column
                 << " ("
                 << node.samples
                 << ")\n";
-
-      offset += 2;
     }
-
-    for (size_t i = 0; i < node.count; i++)
-      print(node.children[i], i, offset);
   }
 
   void clean()

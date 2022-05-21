@@ -488,6 +488,31 @@ struct Table
     return table;
   }
 
+  Attribute::Data get(size_t col, size_t row) const
+  {
+    Attribute::Data data;
+
+    auto &column = columns[col];
+
+    switch (column.type)
+    {
+    case Attribute::CATEGORY:
+      data.category = column.as.category.data[row];
+      break;
+    case Attribute::INT32:
+      data.int32 = column.as.int32s[row];
+      break;
+    case Attribute::FLOAT64:
+      data.float64 = column.as.float64s[row];
+      break;
+    case Attribute::INTERVAL:
+      data.interval = column.as.intervals[row];
+      break;
+    }
+
+    return data;
+  }
+
   void clean()
   {
     for (size_t i = 0; i < cols; i++)
@@ -585,57 +610,57 @@ struct Category
 
   size_t count;
 
-  static Category discretize(const Table::Attribute &attr, size_t count)
+  void discretize(const Table &table, size_t column)
   {
-    Category res;
+    const auto &attr = table.columns[column];
 
-    res.type = attr.type;
+    type = attr.type;
 
-    switch (attr.type)
+    switch (type)
     {
     case Table::Attribute::CATEGORY:
-      res.count = attr.as.category.names->size();
+      count = attr.as.category.names->size();
       break;
     case Table::Attribute::INT32:
     {
-      auto &integer = res.as.int32;
-      integer.values = new std::map<int32_t, uint32_t>;
+      auto &int32 = as.int32;
+      int32.values = new std::map<int32_t, uint32_t>;
 
-      int32_t min = std::numeric_limits<int32_t>::max();
-      int32_t max = std::numeric_limits<int32_t>::lowest();
+      int32_t min = std::numeric_limits<int32_t>::max(),
+        max = std::numeric_limits<int32_t>::lowest();
 
-      for (size_t i = 0; i < count; i++)
+      for (size_t i = 0; i < table.rows; i++)
       {
         auto const value = attr.as.int32s[i];
 
-        if (integer.values->size() < INTEGER_CATEGORY_LIMIT)
-          integer.values->emplace(value, integer.values->size());
+        if (int32.values->size() < INTEGER_CATEGORY_LIMIT)
+          int32.values->emplace(value, int32.values->size());
 
         min = std::min(min, value);
         max = std::max(max, value);
       }
 
-      res.count = integer.values->size();
+      count = int32.values->size();
 
-      if (res.count >= INTEGER_CATEGORY_LIMIT)
+      if (count >= INTEGER_CATEGORY_LIMIT)
       {
-        delete integer.values;
-        integer.values = nullptr;
+        delete int32.values;
+        int32.values = nullptr;
 
-        integer.bins = new double[BINS_COUNT];
-        fill_bins(min, max, integer.bins, BINS_COUNT);
+        int32.bins = new double[BINS_COUNT];
+        fill_bins(min, max, int32.bins, BINS_COUNT);
 
-        res.count = BINS_COUNT - 1;
+        count = BINS_COUNT - 1;
       }
     } break;
     case Table::Attribute::FLOAT64:
     {
-      auto &decimal = res.as.float64;
+      auto &float64 = as.float64;
 
-      double min = std::numeric_limits<double>::max();
-      double max = std::numeric_limits<double>::lowest();
+      double min = std::numeric_limits<double>::max(),
+        max = std::numeric_limits<double>::lowest();
 
-      for (size_t i = 0; i < count; i++)
+      for (size_t i = 0; i < table.rows; i++)
       {
         auto const value = attr.as.float64s[i];
 
@@ -643,17 +668,17 @@ struct Category
         max = std::max(max, value);
       }
 
-      decimal.bins = new double[BINS_COUNT];
-      fill_bins(min, max, decimal.bins, BINS_COUNT);
+      float64.bins = new double[BINS_COUNT];
+      fill_bins(min, max, float64.bins, BINS_COUNT);
 
-      res.count = BINS_COUNT - 1;
+      count = BINS_COUNT - 1;
     } break;
     case Table::Attribute::INTERVAL:
     {
-      auto &interval = res.as.interval;
+      auto &interval = as.interval;
       interval = new std::map<Intervalf, uint32_t>();
 
-      for (size_t i = 0; i < count; i++)
+      for (size_t i = 0; i < table.rows; i++)
       {
         interval->emplace(
           attr.as.intervals[i],
@@ -661,11 +686,9 @@ struct Category
           );
       }
 
-      res.count = interval->size();
+      count = interval->size();
     } break;
     }
-
-    return res;
   }
 
   void clean()
@@ -738,25 +761,28 @@ struct DecisionTree
 
   Category *categories;
   std::string *names;
-  size_t attribute_count;
-  size_t goal_index;
+  size_t count;
+  size_t goal;
 
   Node root;
 
   void construct(
-    const Table &table, size_t goal, size_t *columns_to_exclude, size_t count
+    const Table &table,
+    size_t goal,
+    size_t *columns_to_exclude,
+    size_t columns_count
     )
   {
-    categories = new Category[table.cols];
-    names = new std::string[table.cols];
-    attribute_count = table.cols;
-    goal_index = goal;
+    this->categories = new Category[table.cols];
+    this->names = new std::string[table.cols];
+    this->count = table.cols;
+    this->goal = goal;
 
     size_t max_rows_count = 0;
 
     for (size_t i = 0; i < table.cols; i++)
     {
-      categories[i] = Category::discretize(table.columns[i], table.rows);
+      categories[i].discretize(table, i);
       names[i] = table.columns[i].name;
       max_rows_count =
         std::max(max_rows_count, categories[i].count);
@@ -778,8 +804,6 @@ struct DecisionTree
 
     Data tree_data = {
       table,
-      categories[goal],
-      table.columns[goal],
       (size_t *)data,
       (size_t *)(data + offsets[0]),
       (size_t *)(data + offsets[1]),
@@ -792,7 +816,7 @@ struct DecisionTree
     std::memset(tree_data.used_columns, 0, offsets[3] - offsets[2]);
 
     tree_data.used_columns[goal] = true;
-    for (size_t i = 0; i < count; i++)
+    for (size_t i = 0; i < columns_count; i++)
       tree_data.used_columns[columns_to_exclude[i]] = true;
 
     for (size_t i = 0; i < table.rows; i++)
@@ -842,33 +866,9 @@ struct DecisionTree
       print(root.children[i], i, TAB_WIDTH);
   }
 
-  void print(const Node &node, size_t category, int offset) const
-  {
-    putsn(" ", offset);
-    std::cout << category << ':';
-
-    if (node.count != 0)
-    {
-      std::cout << '\n';
-      putsn(" ", offset + TAB_WIDTH);
-      std::cout << '<' << names[node.column] << " (" << node.samples << ")>\n";
-
-      for (size_t i = 0; i < node.count; i++)
-        print(node.children[i], i, offset + 2 * TAB_WIDTH);
-    }
-    else
-    {
-      std::cout << ' '
-                << node.column
-                << " ("
-                << node.samples
-                << ")\n";
-    }
-  }
-
   void clean()
   {
-    for (size_t i = 0; i < attribute_count; i++)
+    for (size_t i = 0; i < count; i++)
       categories[i].clean();
 
     delete[] categories;
@@ -882,9 +882,6 @@ private:
   {
     const Table &table;
 
-    const Category &discr_goal;
-    const Table::Attribute &goal;
-
     size_t *header,
       *theader,
       *samples;
@@ -897,12 +894,11 @@ private:
   };
 
   double compute_entropy_after_split(
-    size_t attr_index, const Data &data, size_t start, size_t end
+    size_t attr, const Data &data, const size_t *start, const size_t *end
     ) const
   {
-    const auto &discr_attr = categories[attr_index];
-    size_t const cols = data.discr_goal.count;
-    size_t const rows = discr_attr.count;
+    size_t const rows = categories[attr].count,
+      cols = categories[goal].count;
 
     std::memset(
       data.theader, 0, rows * sizeof (size_t)
@@ -911,30 +907,32 @@ private:
       data.samples, 0, cols * rows * sizeof (size_t)
       );
 
-    const auto &attr = data.table.columns[attr_index];
+    size_t const samples_count = end - start;
 
-    for (size_t i = start; i < end; i++)
+    // Reused "start", be careful.
+    while (start < end)
     {
-      size_t const index = data.rows[i];
-      size_t const row = discr_attr.to_category(attr.get(index));
-      size_t const column = data.discr_goal.to_category(data.goal.get(index));
+      size_t const row = to_category(data.table, attr, *start),
+        col = to_category(data.table, goal, *start);
 
-      data.samples[row * cols + column]++;
+      data.samples[row * cols + col]++;
       data.theader[row]++;
+      start++;
     }
 
-    size_t const samples_count = end - start;
     double mean_entropy = 0;
 
     for (size_t i = 0; i < rows; i++)
     {
       size_t const samples_in_category = data.theader[i];
       size_t const offset = i * cols;
+
       double entropy = 0;
 
+      // Compute "entropy * samples_in_category", not just entropy.
       for (size_t j = 0; j < cols; j++)
       {
-        double const samples = (double)data.samples[offset + j];
+        double const samples = data.samples[offset + j];
 
         if (samples != 0)
         {
@@ -963,12 +961,13 @@ private:
     {
       double best_entropy = std::numeric_limits<double>::max();
 
-      for (size_t i = 0; i < attribute_count; i++)
+      for (size_t i = 0; i < count; i++)
       {
         if (!data.used_columns[i])
         {
-          double const entropy =
-            compute_entropy_after_split(i, data, start, end);
+          double const entropy = compute_entropy_after_split(
+            i, data, data.rows + start, data.rows + end
+            );
 
           if (best_entropy > entropy)
           {
@@ -980,7 +979,7 @@ private:
       }
     }
 
-    size_t category_count = categories[best_attribute].count;
+    size_t const category_count = categories[best_attribute].count;
 
     {
       // Two remaining base cases.
@@ -988,7 +987,7 @@ private:
       // No columns to process.
       if (best_attribute == size_t(-1))
       {
-        size_t best_category = 0;
+        best_attribute = 0;
 
         // Reusing header.
         std::memset(
@@ -997,18 +996,17 @@ private:
 
         for (size_t i = start, best_samples_count = 0; i < end; i++)
         {
-          size_t const index =
-            data.discr_goal.to_category(data.goal.get(data.rows[i]));
-          size_t const value = ++data.theader[index];
+          size_t const index = to_category(data.table, goal, data.rows[i]),
+            value = ++data.theader[index];
 
           if (best_samples_count < value)
           {
             best_samples_count = value;
-            best_category = index;
+            best_attribute = index;
           }
         }
 
-        node = { best_category, nullptr, 0, end - start };
+        node = { best_attribute, nullptr, 0, end - start };
 
         return;
       }
@@ -1051,9 +1049,6 @@ private:
         data.bins[i + 1] = data.bins[i] + data.header[i];
       }
 
-      const auto &discr_attr = categories[best_attribute];
-      const auto &attr = data.table.columns[best_attribute];
-
       std::memcpy(
         data.trows + start,
         data.rows + start,
@@ -1062,13 +1057,11 @@ private:
 
       for (size_t i = start; i < end; i++)
       {
-        size_t const index = data.trows[i];
-        size_t const category =
-          discr_attr.to_category(attr.get(index));
+        size_t const row = data.trows[i],
+          category = to_category(data.table, best_attribute, row);
 
-        auto **const slot = data.bins + category;
-        **slot = index;
-        ++*slot;
+        *data.bins[category] = row;
+        ++data.bins[category];
       }
     }
 
@@ -1080,6 +1073,35 @@ private:
     data.used_columns[best_attribute] = false;
 
     delete[] offsets;
+  }
+
+  size_t to_category(const Table &table, size_t column, size_t row) const
+  {
+    return categories[column].to_category(table.get(column, row));
+  }
+
+  void print(const Node &node, size_t category, int offset) const
+  {
+    putsn(" ", offset);
+    std::cout << category << ':';
+
+    if (node.count != 0)
+    {
+      std::cout << '\n';
+      putsn(" ", offset + TAB_WIDTH);
+      std::cout << '<' << names[node.column] << " (" << node.samples << ")>\n";
+
+      for (size_t i = 0; i < node.count; i++)
+        print(node.children[i], i, offset + 2 * TAB_WIDTH);
+    }
+    else
+    {
+      std::cout << ' '
+                << node.column
+                << " ("
+                << node.samples
+                << ")\n";
+    }
   }
 
   void clean(Node &root)

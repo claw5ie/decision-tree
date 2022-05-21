@@ -58,6 +58,20 @@ size_t binary_search_interval(
   return size - 2;
 }
 
+struct Intervalf
+{
+  double min,
+    max;
+};
+
+bool operator<(const Intervalf &left, const Intervalf &right)
+{
+  if (left.min >= right.min)
+    return left.max < right.max;
+  else
+    return true;
+}
+
 struct Table
 {
   struct Attribute
@@ -65,15 +79,17 @@ struct Table
     enum Type
     {
       CATEGORY,
-      INTEGER,
-      DECIMAL
+      INT32,
+      FLOAT64,
+      INTERVAL
     };
 
     union Data
     {
       uint32_t category;
-      int32_t integer;
-      double decimal;
+      int32_t int32;
+      double float64;
+      Intervalf interval;
     };
 
     Type type;
@@ -93,9 +109,11 @@ struct Table
         }
       } category;
 
-      int32_t *ints;
+      int32_t *int32s;
 
-      double *doubles;
+      double *float64s;
+
+      Intervalf *intervals;
     } as;
 
     std::string name;
@@ -110,11 +128,15 @@ struct Table
       case CATEGORY:
         data.category = as.category.data[row];
         break;
-      case INTEGER:
-        data.integer = as.ints[row];
+      case INT32:
+        data.int32 = as.int32s[row];
         break;
-      case DECIMAL:
-        data.decimal = as.doubles[row];
+      case FLOAT64:
+        data.float64 = as.float64s[row];
+        break;
+      case INTERVAL:
+        data.interval = as.intervals[row];
+        break;
       }
 
       return data;
@@ -223,62 +245,173 @@ struct Table
           size_t size;
         } string;
 
-        int32_t integer;
+        int32_t int32;
 
-        double decimal;
+        double float64;
+
+        Intervalf interval;
       } as;
     };
 
     auto const parse_cell =
       [&curr, &is_delimiter]() -> Data
       {
-        if (std::isdigit(*curr) ||
-            ((*curr == '-' || *curr == '+') && std::isdigit(curr[1])))
-        {
-          curr += *curr == '+';
-          Data attr;
-          attr.type = Table::Attribute::INTEGER;
-          attr.as.integer = 0;
-
-          bool const should_be_negative = *curr == '-';
-          for (curr += should_be_negative; std::isdigit(*curr); curr++)
-            attr.as.integer = attr.as.integer * 10 + (*curr - '0');
-
-          if (curr[0] == '.' && std::isdigit(curr[1]))
+        auto const guess_type =
+          [](const char *str)
           {
-            double pow = 0.1;
+            auto const is_number =
+              [](const char *str) -> bool
+              {
+                return std::isdigit(str[0]) ||
+                  ((str[0] == '-' || str[0] == '+') && std::isdigit(str[1]));
+              };
 
-            attr.type = Table::Attribute::DECIMAL;
-            attr.as.decimal = (double)attr.as.integer;
+            if (is_number(str))
+            {
+              str += str[0] == '-' || str[0] == '+';
 
-            for (++curr; std::isdigit(*curr); curr++, pow /= 10)
-              attr.as.decimal += (*curr - '0') * pow;
+              while (std::isdigit(str[0]))
+                str++;
+
+              if (str[0] == '.')
+              {
+                ++str;
+                while (std::isdigit(str[0]))
+                  str++;
+
+                if (str[0] == '-' && is_number(str + 1))
+                  return Table::Attribute::INTERVAL;
+                else
+                  return Table::Attribute::FLOAT64;
+              }
+              else if (str[0] == '-' && is_number(str + 1))
+              {
+                return Table::Attribute::INTERVAL;
+              }
+              else
+              {
+                return Table::Attribute::INT32;
+              }
+            }
+            else if ((str[0] == '<' || str[0] == '>') && is_number(str + 1))
+            {
+              return Table::Attribute::INTERVAL;
+            }
+            else if (str[0] == '$')
+            {
+              return Table::Attribute::INT32;
+            }
+            else
+            {
+              return Table::Attribute::CATEGORY;
+            }
+          };
+
+        auto const parse_float64 =
+          [](const char *str, double &val) -> const char *
+          {
+            bool const should_be_negative = *str == '-';
+
+            str += should_be_negative || *str == '+';
+
+            for (val = 0; std::isdigit(*str); str++)
+              val = val * 10 + (*str - '0');
+
+            if (*str == '.' && std::isdigit(str[1]))
+            {
+              double pow = 0.1;
+
+              for (str++; std::isdigit(*str); str++, pow /= 10)
+                val += (*str - '0') * pow;
+            }
 
             if (should_be_negative)
-              attr.as.decimal = -attr.as.decimal;
+              val = -val;
 
-            return attr;
-          }
-          else
+            return str;
+          };
+
+        auto const parse_int32 =
+          [](const char *str, int32_t &val) -> const char *
           {
-            if (should_be_negative)
-              attr.as.integer = -attr.as.integer;
+            bool const should_be_negative = *str == '-';
 
-            return attr;
-          }
-        }
-        else
+            str += should_be_negative || *str == '+';
+
+            for (val = 0; std::isdigit(*str); str++)
+              val = val * 10 + (*str - '0');
+
+            if (should_be_negative)
+              val = -val;
+
+            return str;
+          };
+
+        Data data;
+        data.type = guess_type(curr);
+
+        switch (data.type)
         {
-          Data attr;
-          attr.type = Table::Attribute::CATEGORY;
-          attr.as.string.text = curr;
+        case Table::Attribute::CATEGORY:
+        {
+          data.as.string.text = curr;
 
           while (!is_delimiter(*curr))
             curr++;
 
-          attr.as.string.size = curr - attr.as.string.text;
+          data.as.string.size = curr - data.as.string.text;
 
-          return attr;
+          return data;
+        }
+        case Table::Attribute::INT32:
+        {
+          if (*curr == '$')
+          {
+            for (data.as.int32 = 0; *curr== '$'; curr++)
+              data.as.int32++;
+          }
+          else
+          {
+            curr = parse_int32(curr, data.as.int32);
+          }
+
+          return data;
+        }
+        case Table::Attribute::FLOAT64:
+        {
+          curr = parse_float64(curr, data.as.float64);
+
+          return data;
+        }
+        case Table::Attribute::INTERVAL:
+        {
+          if (*curr == '<')
+          {
+            data.as.interval.min = std::numeric_limits<double>::lowest();
+            curr = parse_float64(++curr, data.as.interval.max);
+
+            return data;
+          }
+          else if (*curr == '>')
+          {
+            data.as.interval.max = std::numeric_limits<double>::max();
+            curr = parse_float64(++curr, data.as.interval.min);
+
+            return data;
+          }
+          else
+          {
+            curr = parse_float64(curr, data.as.interval.min);
+            curr = parse_float64(++curr, data.as.interval.max);
+
+            if (data.as.interval.min > data.as.interval.max)
+              std::swap(data.as.interval.min, data.as.interval.max);
+
+            return data;
+          }
+        }
+        default:
+          assert(false);
         }
       };
 
@@ -304,11 +437,14 @@ struct Table
               j, value.as.string.text, value.as.string.size
               );
             break;
-          case Table::Attribute::INTEGER:
-            column.as.ints[j] = value.as.integer;
+          case Table::Attribute::INT32:
+            column.as.int32s[j] = value.as.int32;
             break;
-          case Table::Attribute::DECIMAL:
-            column.as.doubles[j] = value.as.decimal;
+          case Table::Attribute::FLOAT64:
+            column.as.float64s[j] = value.as.float64;
+            break;
+          case Table::Attribute::INTERVAL:
+            column.as.intervals[j] = value.as.interval;
             break;
           }
         }
@@ -327,13 +463,17 @@ struct Table
               0, value.as.string.text, value.as.string.size
               );
             break;
-          case Table::Attribute::INTEGER:
-            column.as.ints = new int32_t[table.rows];
-            column.as.ints[0] = value.as.integer;
+          case Table::Attribute::INT32:
+            column.as.int32s = new int32_t[table.rows];
+            column.as.int32s[0] = value.as.int32;
             break;
-          case Table::Attribute::DECIMAL:
-            column.as.doubles = new double[table.rows];
-            column.as.doubles[0] = value.as.decimal;
+          case Table::Attribute::FLOAT64:
+            column.as.float64s = new double[table.rows];
+            column.as.float64s[0] = value.as.float64;
+            break;
+          case Table::Attribute::INTERVAL:
+            column.as.intervals = new Intervalf[table.rows];
+            column.as.intervals[0] = value.as.interval;
             break;
           }
         }
@@ -360,11 +500,14 @@ struct Table
         delete column.as.category.names;
         delete[] column.as.category.data;
         break;
-      case Table::Attribute::INTEGER:
-        delete[] column.as.ints;
+      case Table::Attribute::INT32:
+        delete[] column.as.int32s;
         break;
-      case Table::Attribute::DECIMAL:
-        delete[] column.as.doubles;
+      case Table::Attribute::FLOAT64:
+        delete[] column.as.float64s;
+        break;
+      case Table::Attribute::INTERVAL:
+        delete[] column.as.intervals;
         break;
       }
     }
@@ -387,12 +530,17 @@ struct Table
         case Table::Attribute::CATEGORY:
           std::cout << column.as.category.data[j];
           break;
-        case Table::Attribute::INTEGER:
-          std::cout << column.as.ints[j];
+        case Table::Attribute::INT32:
+          std::cout << column.as.int32s[j];
           break;
-        case Table::Attribute::DECIMAL:
-          std::cout << column.as.doubles[j];
+        case Table::Attribute::FLOAT64:
+          std::cout << column.as.float64s[j];
           break;
+        case Table::Attribute::INTERVAL:
+        {
+          auto &interval = column.as.intervals[j];
+          std::cout << interval.min << '-' << interval.max;
+        } break;
         }
 
         std::cout << (j + 1 < rows ? ' ' : '\n');
@@ -400,6 +548,17 @@ struct Table
     }
   }
 };
+
+void fill_bins(double min, double max, double *bins, size_t count)
+{
+  --count;
+  bins[0] = std::numeric_limits<double>::lowest();
+  bins[count] = std::numeric_limits<double>::max();
+
+  double const interval_length = (max - min) / count;
+  for (size_t i = 1; i < count; i++)
+    bins[i] = min + i * interval_length;
+}
 
 #define INTEGER_CATEGORY_LIMIT 7
 #define BINS_COUNT 4
@@ -414,12 +573,14 @@ struct Category
     {
       std::map<int32_t, uint32_t> *values;
       double *bins;
-    } integer;
+    } int32;
 
     struct
     {
       double *bins;
-    } decimal;
+    } float64;
+
+    std::map<Intervalf, uint32_t> *interval;
   } as;
 
   size_t count;
@@ -435,9 +596,9 @@ struct Category
     case Table::Attribute::CATEGORY:
       res.count = attr.as.category.names->size();
       break;
-    case Table::Attribute::INTEGER:
+    case Table::Attribute::INT32:
     {
-      auto &integer = res.as.integer;
+      auto &integer = res.as.int32;
       integer.values = new std::map<int32_t, uint32_t>;
 
       int32_t min = std::numeric_limits<int32_t>::max();
@@ -445,7 +606,7 @@ struct Category
 
       for (size_t i = 0; i < count; i++)
       {
-        auto const value = attr.as.ints[i];
+        auto const value = attr.as.int32s[i];
 
         if (integer.values->size() < INTEGER_CATEGORY_LIMIT)
           integer.values->emplace(value, integer.values->size());
@@ -461,36 +622,46 @@ struct Category
         delete integer.values;
         integer.values = nullptr;
 
-        double val = min;
         integer.bins = new double[BINS_COUNT];
-        double const interval_length = (max - min) / (BINS_COUNT - 1);
-        for (size_t i = 0; i < BINS_COUNT; i++, val += interval_length)
-          integer.bins[i] = val;
+        fill_bins(min, max, integer.bins, BINS_COUNT);
 
         res.count = BINS_COUNT - 1;
       }
     } break;
-    case Table::Attribute::DECIMAL:
+    case Table::Attribute::FLOAT64:
     {
-      auto &decimal = res.as.decimal;
+      auto &decimal = res.as.float64;
 
       double min = std::numeric_limits<double>::max();
       double max = std::numeric_limits<double>::lowest();
 
       for (size_t i = 0; i < count; i++)
       {
-        auto const value = attr.as.doubles[i];
+        auto const value = attr.as.float64s[i];
 
         min = std::min(min, value);
         max = std::max(max, value);
       }
 
       decimal.bins = new double[BINS_COUNT];
-      double const interval_length = (max - min) / (BINS_COUNT - 1);
-      for (size_t i = 0; i < BINS_COUNT; i++, min += interval_length)
-        decimal.bins[i] = min;
+      fill_bins(min, max, decimal.bins, BINS_COUNT);
 
       res.count = BINS_COUNT - 1;
+    } break;
+    case Table::Attribute::INTERVAL:
+    {
+      auto &interval = res.as.interval;
+      interval = new std::map<Intervalf, uint32_t>();
+
+      for (size_t i = 0; i < count; i++)
+      {
+        interval->emplace(
+          attr.as.intervals[i],
+          interval->size()
+          );
+      }
+
+      res.count = interval->size();
     } break;
     }
 
@@ -503,15 +674,18 @@ struct Category
     {
     case Table::Attribute::CATEGORY:
       return;
-    case Table::Attribute::INTEGER:
-      if (as.integer.values != nullptr)
-        delete as.integer.values;
+    case Table::Attribute::INT32:
+      if (as.int32.values != nullptr)
+        delete as.int32.values;
       else
-        delete[] as.integer.bins;
+        delete[] as.int32.bins;
 
       return;
-    case Table::Attribute::DECIMAL:
-      delete[] as.decimal.bins;
+    case Table::Attribute::FLOAT64:
+      delete[] as.float64.bins;
+      return;
+    case Table::Attribute::INTERVAL:
+      delete as.interval;
       return;
     }
   }
@@ -522,13 +696,26 @@ struct Category
     {
     case Table::Attribute::CATEGORY:
       return value.category;
-    case Table::Attribute::INTEGER:
-      if (as.integer.values != nullptr)
-        return as.integer.values->find(value.integer)->second;
+    case Table::Attribute::INT32:
+      if (as.int32.values != nullptr)
+        return as.int32.values->find(value.int32)->second;
       else
-        return binary_search_interval(value.integer, as.integer.bins, count + 1);
-    case Table::Attribute::DECIMAL:
-      return binary_search_interval(value.decimal, as.decimal.bins, count + 1);
+        return binary_search_interval(value.int32, as.int32.bins, BINS_COUNT);
+    case Table::Attribute::FLOAT64:
+      return binary_search_interval(value.float64, as.float64.bins, BINS_COUNT);
+    case Table::Attribute::INTERVAL:
+    {
+      auto const it = as.interval->lower_bound(value.interval);
+
+      if (it != as.interval->end())
+      {
+        if (it->first.min <= value.interval.max &&
+            value.interval.max <= it->first.max)
+          return it->second;
+      }
+
+      return size_t(-1);
+    }
     }
 
     assert(false);
@@ -577,7 +764,7 @@ struct DecisionTree
 
     size_t offsets[7];
 
-     char *const data = allocate_in_chunks(
+    char *const data = allocate_in_chunks(
       offsets,
       7,
       max_rows_count * sizeof (size_t),
@@ -589,27 +776,29 @@ struct DecisionTree
       (max_rows_count + 1) * sizeof (size_t *)
       );
 
-    Data data_ = {
+    Data tree_data = {
       table,
       categories[goal],
       table.columns[goal],
-      { (size_t *)data, (size_t *)(data + offsets[0]) },
+      (size_t *)data,
+      (size_t *)(data + offsets[0]),
       (size_t *)(data + offsets[1]),
       (bool *)(data + offsets[2]),
-      { (size_t *)(data + offsets[3]), (size_t *)(data + offsets[4]) },
+      (size_t *)(data + offsets[3]),
+      (size_t *)(data + offsets[4]),
       (size_t **)(data + offsets[5])
     };
 
-    std::memset(data_.used_columns, 0, offsets[4] - offsets[3]);
-    data_.used_columns[goal] = true;
+    std::memset(tree_data.used_columns, 0, offsets[3] - offsets[2]);
 
+    tree_data.used_columns[goal] = true;
     for (size_t i = 0; i < count; i++)
-      data_.used_columns[columns_to_exclude[i]] = true;
+      tree_data.used_columns[columns_to_exclude[i]] = true;
 
     for (size_t i = 0; i < table.rows; i++)
-      data_.rows[0][i] = i;
+      tree_data.rows[i] = i;
 
-    construct(root, data_, 0, table.rows);
+    construct(root, tree_data, 0, table.rows);
 
     delete[] data;
   }
@@ -696,13 +885,15 @@ private:
     const Category &discr_goal;
     const Table::Attribute &goal;
 
-    size_t *header[2];
-    size_t *samples;
+    size_t *header,
+      *theader,
+      *samples;
 
     bool *used_columns;
 
-    size_t *rows[2];
-    size_t **offsets;
+    size_t *rows,
+      *trows,
+      **bins;
   };
 
   double compute_entropy_after_split(
@@ -714,7 +905,7 @@ private:
     size_t const rows = discr_attr.count;
 
     std::memset(
-      data.header[0], 0, rows * sizeof (size_t)
+      data.theader, 0, rows * sizeof (size_t)
       );
     std::memset(
       data.samples, 0, cols * rows * sizeof (size_t)
@@ -724,14 +915,12 @@ private:
 
     for (size_t i = start; i < end; i++)
     {
-      size_t const index = data.rows[0][i];
-      size_t const row =
-        discr_attr.to_category(attr.get(index));
-      size_t const column =
-        data.discr_goal.to_category(data.goal.get(index));
+      size_t const index = data.rows[i];
+      size_t const row = discr_attr.to_category(attr.get(index));
+      size_t const column = data.discr_goal.to_category(data.goal.get(index));
 
       data.samples[row * cols + column]++;
-      data.header[0][row]++;
+      data.theader[row]++;
     }
 
     size_t const samples_count = end - start;
@@ -739,7 +928,7 @@ private:
 
     for (size_t i = 0; i < rows; i++)
     {
-      size_t const samples_in_category = data.header[0][i];
+      size_t const samples_in_category = data.theader[i];
       size_t const offset = i * cols;
       double entropy = 0;
 
@@ -783,7 +972,7 @@ private:
 
           if (best_entropy > entropy)
           {
-            std::swap(data.header[0], data.header[1]);
+            std::swap(data.header, data.theader);
             best_entropy = entropy;
             best_attribute = i;
           }
@@ -804,10 +993,10 @@ private:
         for (size_t i = start, best_samples_count = 0; i < end; i++)
         {
           size_t const index =
-            data.discr_goal.to_category(data.goal.get(data.rows[0][i]));
+            data.discr_goal.to_category(data.goal.get(data.rows[i]));
 
           // Reusing header.
-          size_t const value = ++data.header[0][index];
+          size_t const value = ++data.theader[index];
 
           if (best_samples_count < value)
           {
@@ -827,7 +1016,7 @@ private:
         size_t best_attribute = 0;
         for (size_t i = 0; i < category_count && count < 2; i++)
         {
-          if (data.header[1][i] > 0)
+          if (data.header[i] > 0)
           {
             count++;
             best_attribute = i;
@@ -836,7 +1025,7 @@ private:
 
         if (count == 1)
         {
-          node = { best_attribute, nullptr, 0, data.header[1][best_attribute] };
+          node = { best_attribute, nullptr, 0, data.header[best_attribute] };
 
           return;
         }
@@ -852,29 +1041,29 @@ private:
 
     {
       offsets[0] = start;
-      data.offsets[0] = data.rows[0] + start;
+      data.bins[0] = data.rows + start;
       for (size_t i = 0; i < category_count; i++)
       {
-        offsets[i + 1] = offsets[i] + data.header[1][i];
-        data.offsets[i + 1] = data.offsets[i] + data.header[1][i];
+        offsets[i + 1] = offsets[i] + data.header[i];
+        data.bins[i + 1] = data.bins[i] + data.header[i];
       }
 
       const auto &discr_attr = categories[best_attribute];
       const auto &attr = data.table.columns[best_attribute];
 
       std::memcpy(
-        data.rows[1] + start,
-        data.rows[0] + start,
+        data.trows + start,
+        data.rows + start,
         (end - start) * sizeof (size_t)
         );
 
       for (size_t i = start; i < end; i++)
       {
-        size_t const index = data.rows[1][i];
+        size_t const index = data.trows[i];
         size_t const category =
           discr_attr.to_category(attr.get(index));
 
-        auto **const slot = data.offsets + category;
+        auto **const slot = data.bins + category;
         **slot = index;
         ++*slot;
       }

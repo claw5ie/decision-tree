@@ -13,6 +13,8 @@ struct Category
 
   union
   {
+    std::map<std::string, CategoryValue> *category;
+
     struct
     {
       std::map<int32_t, CategoryValue> *values;
@@ -32,8 +34,6 @@ struct Category
   void discretize(const Table &table, size_t column);
 
   void clean();
-
-  CategoryValue to_category(const Table::Attribute::Value &value) const;
 };
 
 #endif // CATEGORY_HPP

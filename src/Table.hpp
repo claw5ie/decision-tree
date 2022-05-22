@@ -28,14 +28,6 @@ struct Table
       INTERVAL
     };
 
-    union Value
-    {
-      uint32_t category;
-      int32_t int32;
-      double float64;
-      Interval interval;
-    };
-
     Type type;
 
     union
@@ -64,8 +56,6 @@ struct Table
     rows;
 
   void read_csv(const char *filepath);
-
-  Attribute::Value get(size_t col, size_t row) const;
 
   void clean();
 

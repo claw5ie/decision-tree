@@ -24,6 +24,8 @@ void Category::discretize(const Table &table, size_t column)
   switch (type)
   {
   case Table::Attribute::CATEGORY:
+    as.category =
+      new std::map<std::string, CategoryValue>(*attr.as.category.names);
     count = attr.as.category.names->size();
     break;
   case Table::Attribute::INT32:
@@ -101,6 +103,7 @@ void Category::clean()
   switch (type)
   {
   case Table::Attribute::CATEGORY:
+    delete as.category;
     return;
   case Table::Attribute::INT32:
     if (as.int32.values != nullptr)
@@ -115,35 +118,4 @@ void Category::clean()
     delete as.interval;
     return;
   }
-}
-
-CategoryValue Category::to_category(const Table::Attribute::Value &value) const
-{
-  switch (type)
-  {
-  case Table::Attribute::CATEGORY:
-    return value.category;
-  case Table::Attribute::INT32:
-    if (as.int32.values != nullptr)
-      return as.int32.values->find(value.int32)->second;
-    else
-      return binary_search_interval(value.int32, as.int32.bins, BINS_COUNT);
-  case Table::Attribute::FLOAT64:
-    return binary_search_interval(value.float64, as.float64.bins, BINS_COUNT);
-  case Table::Attribute::INTERVAL:
-  {
-    auto const it = as.interval->lower_bound(value.interval);
-
-    if (it != as.interval->end())
-    {
-      if (it->first.min <= value.interval.max &&
-          value.interval.max <= it->first.max)
-        return it->second;
-    }
-
-    return INVALID_CATEGORY;
-  }
-  }
-
-  return INVALID_CATEGORY;
 }

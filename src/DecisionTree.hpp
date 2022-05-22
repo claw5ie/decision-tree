@@ -65,6 +65,7 @@ private:
     size_t attr, const Data &data, const size_t *start, const size_t *end
     ) const;
 
+  // Should never fail.
   size_t to_category(const Table &table, size_t column, size_t row) const;
 };
 

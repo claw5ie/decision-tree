@@ -333,5 +333,29 @@ size_t DecisionTree::to_category(
   const Table &table, size_t column, size_t row
   ) const
 {
-  return categories[column].to_category(table.get(column, row));
+  auto &category = categories[column];
+  auto &attr = table.columns[column];
+
+  switch (attr.type)
+  {
+  case Table::Attribute::CATEGORY:
+    return attr.as.category.data[row];
+  case Table::Attribute::INT32:
+  {
+    int32_t const value = attr.as.int32s[row];
+
+    if (category.as.int32.values != nullptr)
+      return category.as.int32.values->find(value)->second;
+    else
+      return binary_search_interval(value, category.as.int32.bins, BINS_COUNT);
+  }
+  case Table::Attribute::FLOAT64:
+    return binary_search_interval(
+      attr.as.float64s[row], category.as.float64.bins, BINS_COUNT
+      );
+  case Table::Attribute::INTERVAL:
+    return category.as.interval->find(attr.as.intervals[row])->second;
+  }
+
+  return INVALID_CATEGORY;
 }

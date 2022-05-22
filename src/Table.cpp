@@ -311,31 +311,6 @@ void Table::read_csv(const char *filepath)
   delete[] file_data;
 }
 
-Table::Attribute::Value Table::get(size_t col, size_t row) const
-{
-  Attribute::Value data;
-
-  auto &column = columns[col];
-
-  switch (column.type)
-  {
-  case Attribute::CATEGORY:
-    data.category = column.as.category.data[row];
-    break;
-  case Attribute::INT32:
-    data.int32 = column.as.int32s[row];
-    break;
-  case Attribute::FLOAT64:
-    data.float64 = column.as.float64s[row];
-    break;
-  case Attribute::INTERVAL:
-    data.interval = column.as.intervals[row];
-    break;
-  }
-
-  return data;
-}
-
 void Table::clean()
 {
   for (size_t i = 0; i < cols; i++)

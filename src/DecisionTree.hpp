@@ -1,6 +1,7 @@
 #ifndef DECISION_TREE_HPP
 #define DECISION_TREE_HPP
 
+#include "String.hpp"
 #include "Table.hpp"
 #include "Category.hpp"
 #include "Utils.hpp"
@@ -17,56 +18,29 @@ struct DecisionTree
     size_t samples;
   };
 
-  Category *categories;
-  std::string *names;
-  size_t count;
-  size_t goal;
-
-  Node root;
-
-  void construct(
-    const Table &table,
-    size_t goal,
-    size_t *columns_to_exclude,
-    size_t columns_count
-    );
-
-  void clean();
-
-  // Data *parse_samples(cons char *samples) const;
-
-  // size_t classify(const Samples *sample) const;
-
-  void print() const;
-
-private:
-  struct Data
+  struct Params
   {
-    const Table &table;
-
-    size_t *header,
-      *theader,
-      *samples;
-
-    bool *used_columns;
-
-    size_t *rows,
-      *trows,
-      **bins;
+    size_t goal;
+    size_t threshold;
+    size_t *columns_to_exclude;
+    size_t columns_count;
   };
 
-  void construct(Node &node, Data &data, size_t start, size_t end);
-
-  void clean(Node &root);
-
-  void print(const Node &node, size_t category, int offset) const;
-
-  double compute_entropy_after_split(
-    size_t attr, const Data &data, const size_t *start, const size_t *end
-    ) const;
-
-  // Should never fail.
-  size_t to_category(const Table &table, size_t column, size_t row) const;
+  Category *categories;
+  String *names;
+  size_t count;
+  size_t goal;
+  Node *root;
 };
+
+DecisionTree construct(const Table &table, const DecisionTree::Params &params);
+
+void clean(DecisionTree &self);
+
+// Data *parse_samples(cons char *samples);
+
+// size_t classify(const DecisionTree &self, const Samples *sample);
+
+void print(const DecisionTree &self);
 
 #endif // DECISION_TREE_HPP

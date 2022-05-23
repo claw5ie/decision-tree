@@ -3,10 +3,10 @@
 #include "Category.hpp"
 #include "Utils.hpp"
 
-void Category::discretize(const Table &table, size_t column)
+Category discretize(const Table &table, size_t column)
 {
   auto const fill_bins =
-    [](double min, double max, double *bins, size_t count)
+    [](double min, double max, double *bins, size_t count) -> void
     {
       --count;
       bins[0] = std::numeric_limits<double>::lowest();
@@ -19,50 +19,62 @@ void Category::discretize(const Table &table, size_t column)
 
   const auto &attr = table.columns[column];
 
-  type = attr.type;
+  Category category;
 
-  switch (type)
-  {
-  case Table::Attribute::CATEGORY:
-    as.category =
-      new std::map<std::string, CategoryValue>(*attr.as.category.names);
-    count = attr.as.category.names->size();
-    break;
-  case Table::Attribute::INT32:
-  {
-    auto &int32 = as.int32;
-    int32.values = new std::map<int32_t, CategoryValue>;
+  category.type = attr.type;
 
-    int32_t min = std::numeric_limits<int32_t>::max(),
-      max = std::numeric_limits<int32_t>::lowest();
+  switch (category.type)
+  {
+  case Attribute::STRING:
+  {
+    auto &map = category.as.string;
+    map = new std::map<String, size_t, StringComparator>;
 
     for (size_t i = 0; i < table.rows; i++)
     {
-      auto const value = attr.as.int32s[i];
+      const auto &value = attr.as.strings[i];
 
-      if (int32.values->size() < INTEGER_CATEGORY_LIMIT)
-        int32.values->emplace(value, int32.values->size());
+      if (map->find(value) == map->end())
+        map->emplace(copy(value), map->size());
+    }
+
+    category.count = map->size();
+  } break;
+  case Attribute::INT64:
+  {
+    auto &int64 = category.as.int64;
+    int64.map = new std::map<int64_t, size_t>;
+
+    int64_t min = std::numeric_limits<int64_t>::max(),
+      max = std::numeric_limits<int64_t>::lowest();
+
+    for (size_t i = 0; i < table.rows; i++)
+    {
+      auto const value = attr.as.int64s[i];
+
+      if (int64.map->size() < INTEGER_CATEGORY_LIMIT)
+        int64.map->emplace(value, int64.map->size());
 
       min = std::min(min, value);
       max = std::max(max, value);
     }
 
-    count = int32.values->size();
+    category.count = int64.map->size();
 
-    if (count >= INTEGER_CATEGORY_LIMIT)
+    if (category.count >= INTEGER_CATEGORY_LIMIT)
     {
-      delete int32.values;
-      int32.values = nullptr;
+      delete int64.map;
+      int64.map = nullptr;
 
-      int32.bins = new double[BINS_COUNT];
-      fill_bins(min, max, int32.bins, BINS_COUNT);
+      int64.bins = new double[BINS_COUNT];
+      fill_bins(min, max, int64.bins, BINS_COUNT);
 
-      count = BINS_COUNT - 1;
+      category.count = BINS_COUNT - 1;
     }
   } break;
-  case Table::Attribute::FLOAT64:
+  case Attribute::FLOAT64:
   {
-    auto &float64 = as.float64;
+    auto &float64 = category.as.float64;
 
     double min = std::numeric_limits<double>::max(),
       max = std::numeric_limits<double>::lowest();
@@ -78,12 +90,12 @@ void Category::discretize(const Table &table, size_t column)
     float64.bins = new double[BINS_COUNT];
     fill_bins(min, max, float64.bins, BINS_COUNT);
 
-    count = BINS_COUNT - 1;
+    category.count = BINS_COUNT - 1;
   } break;
-  case Table::Attribute::INTERVAL:
+  case Attribute::INTERVAL:
   {
-    auto &interval = as.interval;
-    interval = new std::map<Interval, CategoryValue>;
+    auto &interval = category.as.interval;
+    interval = new std::map<Interval, size_t>;
 
     for (size_t i = 0; i < table.rows; i++)
     {
@@ -93,29 +105,71 @@ void Category::discretize(const Table &table, size_t column)
         );
     }
 
-    count = interval->size();
+    category.count = interval->size();
   } break;
+  }
+
+  return category;
+}
+
+void clean(Category &self)
+{
+  switch (self.type)
+  {
+  case Attribute::STRING:
+    for (auto &elem: *self.as.string)
+      delete[] elem.first.data;
+    delete self.as.string;
+    return;
+  case Attribute::INT64:
+    if (self.as.int64.map != nullptr)
+      delete self.as.int64.map;
+    else
+      delete[] self.as.int64.bins;
+    return;
+  case Attribute::FLOAT64:
+    delete[] self.as.float64.bins;
+    return;
+  case Attribute::INTERVAL:
+    delete self.as.interval;
+    return;
   }
 }
 
-void Category::clean()
+size_t to_category(const Category &self, const Attribute::Value &value)
 {
-  switch (type)
+  switch (self.type)
   {
-  case Table::Attribute::CATEGORY:
-    delete as.category;
-    return;
-  case Table::Attribute::INT32:
-    if (as.int32.values != nullptr)
-      delete as.int32.values;
+  case Attribute::STRING:
+  {
+    auto const it = self.as.string->find(value.as.string);
+
+    if (it != self.as.string->end())
+      return it->second;
+  } break;
+  case Attribute::INT64:
+  {
+    if (self.as.int64.map != nullptr)
+    {
+      auto const it = self.as.int64.map->find(value.as.int64);
+
+      if (it != self.as.int64.map->end())
+        return it->second;
+    }
     else
-      delete[] as.int32.bins;
-    return;
-  case Table::Attribute::FLOAT64:
-    delete[] as.float64.bins;
-    return;
-  case Table::Attribute::INTERVAL:
-    delete as.interval;
-    return;
+    {
+      return binary_search_interval(
+        value.as.int64, self.as.int64.bins, BINS_COUNT
+        );
+    }
+  } break;
+  case Attribute::FLOAT64:
+    return binary_search_interval(
+      value.as.float64, self.as.float64.bins, BINS_COUNT
+      );
+  case Attribute::INTERVAL:
+    return self.as.interval->find(value.as.interval)->second;
   }
+
+  return size_t(-1);
 }

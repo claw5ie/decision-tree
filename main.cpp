@@ -8,18 +8,16 @@ int main(int argc, char **argv)
 {
   assert(argc == 2);
 
-  Table table;
+  Table table = read_csv(argv[1]);
 
-  table.read_csv(argv[1]);
-  table.print();
+  print(table);
   std::cout << '\n';
 
-  DecisionTree tree;
-
   size_t columns_to_exclude[1] = { 0 };
-  tree.construct(table, 0, columns_to_exclude, 1);
-  tree.print();
+  DecisionTree tree = construct(table, { 0, 3, columns_to_exclude, 1 });
 
-  table.clean();
-  tree.clean();
+  print(tree);
+
+  clean(table);
+  clean(tree);
 }

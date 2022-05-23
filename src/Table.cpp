@@ -19,27 +19,7 @@ bool is_delimiter(char ch)
   return ch == ',' || ch == '\n' || ch == '\0';
 }
 
-struct Cell
-{
-  Table::Attribute::Type type;
-
-  union
-  {
-    struct
-    {
-      const char *text;
-      size_t size;
-    } string;
-
-    int32_t int32;
-
-    double float64;
-
-    Interval interval;
-  } as;
-};
-
-const char *parse_cell(const char *str, Cell &cell)
+Attribute::Value read_attribute_value(const char *&str)
 {
   auto const guess_type =
     [](const char *str)
@@ -65,144 +45,153 @@ const char *parse_cell(const char *str, Cell &cell)
             str++;
 
           if (str[0] == '-' && is_number(str + 1))
-            return Table::Attribute::INTERVAL;
+            return Attribute::INTERVAL;
           else
-            return Table::Attribute::FLOAT64;
+            return Attribute::FLOAT64;
         }
         else if (str[0] == '-' && is_number(str + 1))
         {
-          return Table::Attribute::INTERVAL;
+          return Attribute::INTERVAL;
         }
         else
         {
-          return Table::Attribute::INT32;
+          return Attribute::INT64;
         }
       }
       else if ((str[0] == '<' || str[0] == '>') && is_number(str + 1))
       {
-        return Table::Attribute::INTERVAL;
+        return Attribute::INTERVAL;
       }
       else if (str[0] == '$')
       {
-        return Table::Attribute::INT32;
+        return Attribute::INT64;
       }
       else
       {
-        return Table::Attribute::CATEGORY;
+        return Attribute::STRING;
       }
     };
 
-  cell.type = guess_type(str);
+  Attribute::Value value;
 
-  switch (cell.type)
+  value.type = guess_type(str);
+
+  switch (value.type)
   {
-  case Table::Attribute::CATEGORY:
+  case Attribute::STRING:
   {
-    cell.as.string.text = str;
+    const char *const start = str;
 
     while (!is_delimiter(*str))
       str++;
 
-    cell.as.string.size = str - cell.as.string.text;
-
-    return str;
-  }
-  case Table::Attribute::INT32:
-  {
+    value.as.string = copy(start, str);
+  } break;
+  case Attribute::INT64:
     if (*str == '$')
     {
-      for (cell.as.int32 = 0; *str== '$'; str++)
-        cell.as.int32++;
+      for (value.as.int64 = 0; *str== '$'; str++)
+        value.as.int64++;
     }
     else
     {
-      str = parse_int32(str, cell.as.int32);
+      value.as.int64 = read_int64(str);
     }
-
-    return str;
-  }
-  case Table::Attribute::FLOAT64:
-  {
-    str = parse_float64(str, cell.as.float64);
-
-    return str;
-  }
-  case Table::Attribute::INTERVAL:
-  {
+    break;
+  case Attribute::FLOAT64:
+    value.as.float64 = read_float64(str);
+    break;
+  case Attribute::INTERVAL:
     if (*str == '<')
     {
-      cell.as.interval.min = std::numeric_limits<double>::lowest();
-      str = parse_float64(++str, cell.as.interval.max);
-
-      return str;
+      value.as.interval.min = std::numeric_limits<double>::lowest();
+      value.as.interval.max = read_float64(++str);
     }
     else if (*str == '>')
     {
-      cell.as.interval.max = std::numeric_limits<double>::max();
-      str = parse_float64(++str, cell.as.interval.min);
-
-      return str;
+      value.as.interval.min = read_float64(++str);
+      value.as.interval.max = std::numeric_limits<double>::max();
     }
     else
     {
-      str = parse_float64(str, cell.as.interval.min);
-      str = parse_float64(++str, cell.as.interval.max);
+      value.as.interval.min = read_float64(str);
+      value.as.interval.max = read_float64(++str);
 
-      if (cell.as.interval.min > cell.as.interval.max)
-        std::swap(cell.as.interval.min, cell.as.interval.max);
-
-      return str;
+      if (value.as.interval.min > value.as.interval.max)
+        std::swap(value.as.interval.min, value.as.interval.max);
     }
+    break;
   }
-  default:
-    assert(false);
-  }
+
+  return value;
 }
 
-void Table::Attribute::insert_category(size_t row, const char *string, size_t size)
+Attribute::Value get(const Table &self, size_t col, size_t row)
 {
-  auto const it = as.category.names->emplace(
-    std::string(string, size), as.category.names->size()
-    );
-  as.category.data[row] = it.first->second;
+  auto &column = self.columns[col];
+  Attribute::Value value;
+
+  value.type = column.type;
+
+  switch (column.type)
+  {
+  case Attribute::STRING:
+    value.as.string = column.as.strings[row];
+    break;
+  case Attribute::INT64:
+    value.as.int64 = column.as.int64s[row];
+    break;
+  case Attribute::FLOAT64:
+    value.as.float64 = column.as.float64s[row];
+    break;
+  case Attribute::INTERVAL:
+    value.as.interval = column.as.intervals[row];
+    break;
+  }
+
+  return value;
 }
 
-void Table::read_csv(const char *filepath)
+Table read_csv(const char *filepath)
 {
-  size_t const file_size =
-    [filepath]() -> size_t
+  char *const file_data =
+    [filepath]() -> char *
     {
-      struct stat stats;
+      size_t file_size = 0;
 
-      if (stat(filepath, &stats) == -1)
       {
-        std::cerr << "ERROR: failed to stat the file `"
-                  << filepath
-                  << "`.\n";
+        struct stat stats;
+
+        if (stat(filepath, &stats) == -1)
+        {
+          std::cerr << "ERROR: failed to stat the file `"
+                    << filepath
+                    << "`.\n";
+          std::exit(EXIT_FAILURE);
+        }
+
+        file_size = stats.st_size;
+      }
+
+      char *const file_data = new char[file_size + 1];
+
+      std::fstream file(filepath, std::fstream::in);
+
+      if (!file.is_open())
+      {
+        std::cerr << "ERROR: failed to open the file `" << filepath << "`.\n";
         std::exit(EXIT_FAILURE);
       }
 
-      return stats.st_size;
+      file.read(file_data, file_size);
+      file_data[file_size] = '\0';
+      file.close();
+
+      return file_data;
     }();
 
-  char *const file_data = new char[file_size + 1];
-
-  {
-    std::fstream file(filepath, std::fstream::in);
-
-    if (!file.is_open())
-    {
-      std::cerr << "ERROR: failed to open the file `" << filepath << "`.\n";
-      std::exit(EXIT_FAILURE);
-    }
-
-    file.read(file_data, file_size);
-    file_data[file_size] = '\0';
-    file.close();
-  }
-
-  rows = 0;
-  cols = 1;
+  size_t rows = 0;
+  size_t cols = 1;
 
   {
     const char *ch = file_data;
@@ -222,7 +211,7 @@ void Table::read_csv(const char *filepath)
     }
   }
 
-  columns = new Table::Attribute[cols]{ };
+  Attribute *const columns = new Attribute[cols]{ };
 
   const char *curr = file_data;
 
@@ -233,9 +222,12 @@ void Table::read_csv(const char *filepath)
     while (!is_delimiter(*curr))
       curr++;
 
-    assert(*curr != '\0');
-    columns[i].name = std::string(start, curr);
+    if (i + 1 < cols)
+      assert(*curr == ',');
+    else
+      assert(*curr == '\n');
 
+    columns[i].name = copy(start, curr);
     curr += *curr != '\0';
   }
 
@@ -243,130 +235,129 @@ void Table::read_csv(const char *filepath)
   // some code. Probably not worth it, although this will eliminate the need of
   // "is_initialized" variable. Also, making redundant checks each time, even
   // though the "else" statement will only be executed once is kinda meh...
-  for (size_t j = 0; j < rows; j++)
+  for (size_t i = 0; i < rows; i++)
   {
-    for (size_t i = 0; i < cols; i++)
+    for (size_t j = 0; j < cols; j++)
     {
-      Cell value;
-      curr = parse_cell(curr, value);
+      Attribute::Value value = read_attribute_value(curr);
 
-      auto &column = columns[i];
-      if (column.is_initialized)
-      {
-        assert(column.type == value.type);
+      auto &column = columns[j];
 
-        switch (column.type)
-        {
-        case Table::Attribute::CATEGORY:
-          column.insert_category(
-            j, value.as.string.text, value.as.string.size
-            );
-          break;
-        case Table::Attribute::INT32:
-          column.as.int32s[j] = value.as.int32;
-          break;
-        case Table::Attribute::FLOAT64:
-          column.as.float64s[j] = value.as.float64;
-          break;
-        case Table::Attribute::INTERVAL:
-          column.as.intervals[j] = value.as.interval;
-          break;
-        }
-      }
-      else
+      if (!column.is_initialized)
       {
         column.type = value.type;
         column.is_initialized = true;
 
         switch (value.type)
         {
-        case Table::Attribute::CATEGORY:
-          column.as.category.names =
-            new std::map<std::string, CategoryValue>;
-          column.as.category.data = new CategoryValue[rows];
-          column.insert_category(
-            0, value.as.string.text, value.as.string.size
-            );
+        case Attribute::STRING:
+          column.as.strings = new String[rows];
           break;
-        case Table::Attribute::INT32:
-          column.as.int32s = new int32_t[rows];
-          column.as.int32s[0] = value.as.int32;
+        case Attribute::INT64:
+          column.as.int64s = new int64_t[rows];
           break;
-        case Table::Attribute::FLOAT64:
+        case Attribute::FLOAT64:
           column.as.float64s = new double[rows];
-          column.as.float64s[0] = value.as.float64;
           break;
-        case Table::Attribute::INTERVAL:
+        case Attribute::INTERVAL:
           column.as.intervals = new Interval[rows];
-          column.as.intervals[0] = value.as.interval;
           break;
         }
       }
 
-      assert(is_delimiter(*curr));
+      assert(column.type == value.type);
+
+      switch (column.type)
+      {
+      case Attribute::STRING:
+        column.as.strings[i] = value.as.string;
+        break;
+      case Attribute::INT64:
+        column.as.int64s[i] = value.as.int64;
+        break;
+      case Attribute::FLOAT64:
+        column.as.float64s[i] = value.as.float64;
+        break;
+      case Attribute::INTERVAL:
+        column.as.intervals[i] = value.as.interval;
+        break;
+      }
+
+      if (j + 1 < cols)
+        assert(*curr == ',');
+      else if (i + 1 < rows)
+        assert(*curr == '\n');
+      else
+        assert(*curr == '\0');
+
       curr += *curr != '\0';
     }
   }
 
   delete[] file_data;
+
+  return { columns, cols, rows };
 }
 
-void Table::clean()
+void clean(Table &self)
 {
-  for (size_t i = 0; i < cols; i++)
+  for (size_t i = 0; i < self.cols; i++)
   {
-    auto &column = columns[i];
+    auto &column = self.columns[i];
 
     switch (column.type)
     {
-    case Table::Attribute::CATEGORY:
-      delete column.as.category.names;
-      delete[] column.as.category.data;
+    case Attribute::STRING:
+      for (size_t i = 0; i < self.rows; i++)
+        delete[] column.as.strings[i].data;
+      delete[] column.as.strings;
       break;
-    case Table::Attribute::INT32:
-      delete[] column.as.int32s;
+    case Attribute::INT64:
+      delete[] column.as.int64s;
       break;
-    case Table::Attribute::FLOAT64:
+    case Attribute::FLOAT64:
       delete[] column.as.float64s;
       break;
-    case Table::Attribute::INTERVAL:
+    case Attribute::INTERVAL:
       delete[] column.as.intervals;
       break;
     }
+
+    delete[] column.name.data;
   }
 
-  delete[] columns;
+  delete[] self.columns;
 }
 
-void Table::print() const
+void print(const Table &self)
 {
-  for (size_t i = 0; i < cols; i++)
+  for (size_t i = 0; i < self.cols; i++)
   {
-    auto &column = columns[i];
+    auto &column = self.columns[i];
 
-    std::cout << column.name << ", " << column.type << ": ";
+    std::cout << column.name.data << ", " << column.type << ": ";
 
-    for (size_t j = 0; j < rows; j++)
+    for (size_t j = 0; j < self.rows; j++)
     {
       switch (column.type)
       {
-      case Table::Attribute::CATEGORY:
-        std::cout << column.as.category.data[j];
+      case Attribute::STRING:
+        std::cout << column.as.strings[j].data;
         break;
-      case Table::Attribute::INT32:
-        std::cout << column.as.int32s[j];
+      case Attribute::INT64:
+        std::cout << column.as.int64s[j];
         break;
-      case Table::Attribute::FLOAT64:
+      case Attribute::FLOAT64:
         std::cout << column.as.float64s[j];
         break;
-      case Table::Attribute::INTERVAL:
+      case Attribute::INTERVAL:
       {
         auto &interval = column.as.intervals[j];
         std::cout << interval.min << '-' << interval.max;
       } break;
       }
 
-      std::cout << (j + 1 < rows ? ' ' : '\n');
+      std::cout << (j + 1 < self.rows ? ' ' : '\n');
     }
   }
 }

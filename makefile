@@ -4,8 +4,8 @@ OUTPUT=main.out
 
 all: debug_build
 
-debug_build: ./main.cpp ./src/Table.cpp ./src/Category.cpp ./src/DecisionTree.cpp ./src/Utils.cpp
+debug_build: ./main.cpp ./src/Table.cpp ./src/Category.cpp ./src/DecisionTree.cpp ./src/Mat.cpp ./src/String.cpp ./src/Utils.cpp
 	g++ $(WFLAGS) $(OFLAGS) -o $(OUTPUT) $^
 
-release_build: ./main.cpp ./src/Table.cpp ./src/Category.cpp ./src/DecisionTree.cpp ./src/Utils.cpp
+release_build: ./main.cpp ./src/Table.cpp ./src/Category.cpp ./src/DecisionTree.cpp ./src/Mat.cpp ./src/String.cpp ./src/Utils.cpp
 	g++ -O3 -D NDEBUG -o $(OUTPUT) $^

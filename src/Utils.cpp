@@ -51,28 +51,30 @@ size_t binary_search_interval(
   return size - 2;
 }
 
-const char *parse_int32(const char *str, int32_t &val)
+int64_t read_int64(const char *&str)
 {
   bool const should_be_negative = *str == '-';
 
   str += should_be_negative || *str == '+';
 
-  for (val = 0; std::isdigit(*str); str++)
+  int64_t val = 0;
+  for (; std::isdigit(*str); str++)
     val = val * 10 + (*str - '0');
 
   if (should_be_negative)
     val = -val;
 
-  return str;
+  return val;
 }
 
-const char *parse_float64(const char *str, double &val)
+double read_float64(const char *&str)
 {
   bool const should_be_negative = *str == '-';
 
   str += should_be_negative || *str == '+';
 
-  for (val = 0; std::isdigit(*str); str++)
+  double val = 0;
+  for (; std::isdigit(*str); str++)
     val = val * 10 + (*str - '0');
 
   if (*str == '.' && std::isdigit(str[1]))
@@ -86,5 +88,5 @@ const char *parse_float64(const char *str, double &val)
   if (should_be_negative)
     val = -val;
 
-  return str;
+  return val;
 }

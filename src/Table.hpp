@@ -1,12 +1,8 @@
 #ifndef TABLE_HPP
 #define TABLE_HPP
 
-#include <string>
 #include <map>
-
-using CategoryValue = uint32_t;
-
-#define INVALID_CATEGORY (std::numeric_limits<CategoryValue>::max())
+#include "String.hpp"
 
 struct Interval
 {
@@ -16,50 +12,56 @@ struct Interval
 
 bool operator<(const Interval &left, const Interval &right);
 
-struct Table
+struct Attribute
 {
-  struct Attribute
+  enum Type
   {
-    enum Type
-    {
-      CATEGORY,
-      INT32,
-      FLOAT64,
-      INTERVAL
-    };
+    STRING,
+    INT64,
+    FLOAT64,
+    INTERVAL
+  };
 
+  struct Value
+  {
     Type type;
 
     union
     {
-      struct
-      {
-        std::map<std::string, CategoryValue> *names;
-        CategoryValue *data;
-      } category;
-
-      int32_t *int32s;
-
-      double *float64s;
-
-      Interval *intervals;
+      String string;
+      int64_t int64;
+      double float64;
+      Interval interval;
     } as;
-
-    std::string name;
-    bool is_initialized;
-
-    void insert_category(size_t row, const char *string, size_t size);
   };
 
+  Type type;
+
+  union
+  {
+    String *strings;
+    int64_t *int64s;
+    double *float64s;
+    Interval *intervals;
+  } as;
+
+  String name;
+  bool is_initialized;
+};
+
+struct Table
+{
   Attribute *columns;
   size_t cols,
     rows;
-
-  void read_csv(const char *filepath);
-
-  void clean();
-
-  void print() const;
 };
+
+Attribute::Value get(const Table &self, size_t column, size_t row);
+
+Table read_csv(const char *filepath);
+
+void clean(Table &self);
+
+void print(const Table &self);
 
 #endif // TABLE_HPP

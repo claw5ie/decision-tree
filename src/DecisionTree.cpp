@@ -1,87 +1,285 @@
 #include <iostream>
 #include <limits>
+#include <algorithm>
 #include <cstring>
 #include <cmath>
+#include "Mat.hpp"
 #include "DecisionTree.hpp"
 
-void DecisionTree::construct(
-  const Table &table,
-  size_t goal,
-  size_t *columns_to_exclude,
-  size_t columns_count
+struct ConstTreeData
+{
+  Matzu table;
+  size_t const threshold;
+
+  size_t *header,
+    *theader;
+  Matzu samples;
+
+  bool *const used_columns;
+
+  size_t *const rows;
+};
+
+struct MutableTreeData
+{
+  DecisionTree::Node &node;
+  size_t start;
+  size_t end;
+};
+
+void construct(
+  const DecisionTree &self, const MutableTreeData &mut, ConstTreeData &cons
   )
 {
-  this->categories = new Category[table.cols];
-  this->names = new std::string[table.cols];
-  this->count = table.cols;
-  this->goal = goal;
+  auto const compute_entropy_after_split =
+    [&self, &cons](size_t attr, const size_t *start, const size_t *end) -> double
+    {
+      cons.samples.rows = self.categories[attr].count;
+      cons.samples.cols = self.categories[self.goal].count;
+
+      std::memset(
+        cons.theader, 0, cons.samples.rows * sizeof (size_t)
+        );
+      std::memset(
+        cons.samples.data,
+        0,
+        cons.samples.cols * cons.samples.rows * sizeof (size_t)
+        );
+
+      size_t const samples_count = end - start;
+
+      while (start < end)
+      {
+        size_t const row = at_column_major(cons.table, attr, *start),
+          col = at_column_major(cons.table, self.goal, *start);
+
+        at_row_major(cons.samples, row, col)++;
+        cons.theader[row]++;
+        start++;
+      }
+
+      double mean_entropy = 0;
+
+      for (size_t i = 0; i < cons.samples.rows; i++)
+      {
+        size_t const samples_in_category = cons.theader[i];
+
+        double entropy = 0;
+
+        // Compute "entropy * samples_in_category", not just entropy.
+        for (size_t j = 0; j < cons.samples.cols; j++)
+        {
+          double const samples = (double)at_row_major(cons.samples, i, j);
+
+          if (samples != 0)
+          {
+            entropy +=
+              samples * std::log(samples / samples_in_category) / std::log(2);
+          }
+        }
+
+        mean_entropy += entropy / samples_count;
+      }
+
+      return -mean_entropy;
+    };
+
+  if (mut.end - mut.start <= cons.threshold)
+    return;
+
+  size_t best_attribute = size_t(-1);
+
+  {
+    double best_entropy = std::numeric_limits<double>::max();
+
+    for (size_t i = 0; i < self.count; i++)
+    {
+      if (!cons.used_columns[i])
+      {
+        double const entropy = compute_entropy_after_split(
+          i, cons.rows + mut.start, cons.rows + mut.end
+          );
+
+        if (best_entropy > entropy)
+        {
+          std::swap(cons.header, cons.theader);
+          best_entropy = entropy;
+          best_attribute = i;
+        }
+      }
+    }
+  }
+
+  size_t const category_count = self.categories[best_attribute].count;
+  size_t best_goal_category = size_t(-1);
+
+  // Reusing temporary header.
+  std::memset(
+    cons.theader, 0, self.categories[self.goal].count * sizeof (size_t)
+    );
+
+  for (size_t i = mut.start, best_samples_count = 0; i < mut.end; i++)
+  {
+    size_t const index = at_column_major(cons.table, self.goal, cons.rows[i]);
+    size_t const value = ++cons.theader[index];
+
+    if (best_samples_count < value)
+    {
+      best_samples_count = value;
+      best_goal_category = index;
+    }
+  }
+
+  // No columns to process.
+  if (best_attribute == size_t(-1))
+  {
+    mut.node = { best_goal_category, nullptr, 0, mut.end - mut.start };
+
+    return;
+  }
+
+  mut.node.column = best_attribute;
+  mut.node.children = new DecisionTree::Node[category_count];
+  mut.node.count = category_count;
+  mut.node.samples = mut.end - mut.start;
+
+  size_t *const offsets = new size_t[category_count + 1];
+
+  offsets[0] = mut.start;
+  for (size_t i = 0; i < category_count; i++)
+  {
+    size_t const samples = cons.header[i];
+    offsets[i + 1] = offsets[i] + samples;
+
+    if (samples <= cons.threshold)
+      mut.node.children[i] = { best_goal_category, nullptr, 0, samples };
+  }
+
+  std::sort(
+    cons.rows + mut.start,
+    cons.rows + mut.end,
+    [&cons, &best_attribute](size_t left, size_t right) -> bool
+    {
+      return at_column_major(cons.table, best_attribute, left) <
+        at_column_major(cons.table, best_attribute, right);
+    }
+    );
+
+  cons.used_columns[best_attribute] = true;
+
+  for (size_t i = 0; i < mut.node.count; i++)
+  {
+    construct(
+      self,
+      MutableTreeData { mut.node.children[i], offsets[i], offsets[i + 1] },
+      cons
+      );
+  }
+
+  cons.used_columns[best_attribute] = false;
+
+  delete[] offsets;
+}
+
+DecisionTree construct(const Table &table, const DecisionTree::Params &params)
+{
+  DecisionTree tree = {
+    new Category[table.cols],
+    new String[table.cols],
+    table.cols,
+    params.goal,
+    new DecisionTree::Node{ }
+  };
 
   size_t max_rows_count = 0;
 
   for (size_t i = 0; i < table.cols; i++)
   {
-    categories[i].discretize(table, i);
-    names[i] = table.columns[i].name;
+    tree.categories[i] = discretize(table, i);
+    tree.names[i] = copy(table.columns[i].name);
     max_rows_count =
-      std::max(max_rows_count, categories[i].count);
+      std::max(max_rows_count, tree.categories[i].count);
   }
 
-  size_t offsets[7];
+  size_t offsets[6];
 
   char *const data = allocate_in_chunks(
     offsets,
-    7,
+    6,
+    table.cols * table.rows * sizeof (size_t),
     max_rows_count * sizeof (size_t),
     max_rows_count * sizeof (size_t),
-    max_rows_count * categories[goal].count * sizeof (size_t),
+    max_rows_count * tree.categories[tree.goal].count * sizeof (size_t),
     table.cols * sizeof (bool),
-    table.rows * sizeof (size_t),
-    table.rows * sizeof (size_t),
-    (max_rows_count + 1) * sizeof (size_t *)
+    table.rows * sizeof (size_t)
     );
 
-  Data tree_data = {
-    table,
-    (size_t *)data,
+  ConstTreeData cons_data = {
+    { (size_t *)data, table.rows, table.cols },
+    params.threshold,
     (size_t *)(data + offsets[0]),
     (size_t *)(data + offsets[1]),
-    (bool *)(data + offsets[2]),
-    (size_t *)(data + offsets[3]),
-    (size_t *)(data + offsets[4]),
-    (size_t **)(data + offsets[5])
+    { (size_t *)(data + offsets[2]), 0, 0 },
+    (bool *)(data + offsets[3]),
+    (size_t *)(data + offsets[4])
   };
 
-  std::memset(tree_data.used_columns, 0, offsets[3] - offsets[2]);
+  for (size_t i = 0; i < table.cols; i++)
+  {
+    auto &category = tree.categories[i];
 
-  tree_data.used_columns[goal] = true;
-  for (size_t i = 0; i < columns_count; i++)
-    tree_data.used_columns[columns_to_exclude[i]] = true;
+    for (size_t j = 0; j < table.rows; j++)
+    {
+      at_column_major(cons_data.table, i, j) =
+        to_category(category, get(table, i, j));
+    }
+  }
+
+  std::memset(cons_data.used_columns, 0, offsets[4] - offsets[3]);
+
+  cons_data.used_columns[tree.goal] = true;
+  for (size_t i = 0; i < params.columns_count; i++)
+    cons_data.used_columns[params.columns_to_exclude[i]] = true;
 
   for (size_t i = 0; i < table.rows; i++)
-    tree_data.rows[i] = i;
+    cons_data.rows[i] = i;
 
-  construct(root, tree_data, 0, table.rows);
+  construct(tree, MutableTreeData { *tree.root, 0, table.rows }, cons_data);
 
   delete[] data;
+
+  return tree;
 }
 
-void DecisionTree::clean()
+void clean(DecisionTree::Node &root)
 {
-  for (size_t i = 0; i < count; i++)
-    categories[i].clean();
+  for (size_t i = 0; i < root.count; i++)
+    clean(root.children[i]);
 
-  delete[] categories;
-  delete[] names;
-
-  clean(root);
+  delete[] root.children;
 }
 
-// Data *DecisionTree::parse_samples(cons char *samples) const
+void clean(DecisionTree &self)
+{
+  for (size_t i = 0; i < self.count; i++)
+  {
+    clean(self.categories[i]);
+    delete[] self.names[i].data;
+  }
+
+  delete[] self.categories;
+  delete[] self.names;
+
+  clean(*self.root);
+  delete self.root;
+}
+
+// Data *parse_samples(cons char *samples) const
 // {
 //   return nullptr;
 // }
 
-// size_t DecisionTree::classify(const Samples *sample) const
+// size_t classify(const Samples *sample) const
 // {
 //   const Node *curr = &root;
 
@@ -107,163 +305,24 @@ void DecisionTree::clean()
 //   return curr->column;
 // }
 
-void DecisionTree::print() const
+void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
 {
-  std::cout << "<" << names[root.column] << " (" << root.samples << ")>\n";
-
-  for (size_t i = 0; i < root.count; i++)
-    print(root.children[i], i, TAB_WIDTH);
-}
-
-void DecisionTree::construct(Node &node, Data &data, size_t start, size_t end)
-{
-  if (end - start <= 0)
-  {
-    node = { size_t(-1), nullptr, 0, 0 };
-
-    return;
-  }
-
-  size_t best_attribute = size_t(-1);
-
-  {
-    double best_entropy = std::numeric_limits<double>::max();
-
-    for (size_t i = 0; i < count; i++)
-    {
-      if (!data.used_columns[i])
-      {
-        double const entropy = compute_entropy_after_split(
-          i, data, data.rows + start, data.rows + end
-          );
-
-        if (best_entropy > entropy)
-        {
-          std::swap(data.header, data.theader);
-          best_entropy = entropy;
-          best_attribute = i;
-        }
-      }
-    }
-  }
-
-  size_t const category_count = categories[best_attribute].count;
-
-  {
-    // Two remaining base cases.
-
-    // No columns to process.
-    if (best_attribute == size_t(-1))
-    {
-      best_attribute = 0;
-
-      // Reusing header.
-      std::memset(
-        data.theader, 0, categories[goal].count * sizeof (size_t)
-        );
-
-      for (size_t i = start, best_samples_count = 0; i < end; i++)
-      {
-        size_t const index = to_category(data.table, goal, data.rows[i]),
-          value = ++data.theader[index];
-
-        if (best_samples_count < value)
-        {
-          best_samples_count = value;
-          best_attribute = index;
-        }
-      }
-
-      node = { best_attribute, nullptr, 0, end - start };
-
-      return;
-    }
-
-    // All samples are in one category.
-    {
-      uint8_t count = 0;
-      size_t best_attribute = 0;
-      for (size_t i = 0; i < category_count && count < 2; i++)
-      {
-        if (data.header[i] > 0)
-        {
-          count++;
-          best_attribute = i;
-        }
-      }
-
-      if (count == 1)
-      {
-        node = { best_attribute, nullptr, 0, data.header[best_attribute] };
-
-        return;
-      }
-    }
-  }
-
-  node.column = best_attribute;
-  node.children = new Node[category_count];
-  node.count = category_count;
-  node.samples = end - start;
-
-  size_t *const offsets = new size_t[category_count + 1];
-
-  {
-    offsets[0] = start;
-    data.bins[0] = data.rows + start;
-    for (size_t i = 0; i < category_count; i++)
-    {
-      offsets[i + 1] = offsets[i] + data.header[i];
-      data.bins[i + 1] = data.bins[i] + data.header[i];
-    }
-
-    std::memcpy(
-      data.trows + start,
-      data.rows + start,
-      (end - start) * sizeof (size_t)
-      );
-
-    for (size_t i = start; i < end; i++)
-    {
-      size_t const row = data.trows[i],
-        category = to_category(data.table, best_attribute, row);
-
-      *data.bins[category] = row;
-      ++data.bins[category];
-    }
-  }
-
-  data.used_columns[best_attribute] = true;
-
-  for (size_t i = 0; i < node.count; i++)
-    construct(node.children[i], data, offsets[i], offsets[i + 1]);
-
-  data.used_columns[best_attribute] = false;
-
-  delete[] offsets;
-}
-
-void DecisionTree::clean(Node &root)
-{
-  for (size_t i = 0; i < root.count; i++)
-    clean(root.children[i]);
-
-  delete[] root.children;
-}
-
-void DecisionTree::print(const Node &node, size_t category, int offset) const
-{
-  putsn(" ", offset);
-  std::cout << category << ':';
-
   if (node.count != 0)
   {
     std::cout << '\n';
     putsn(" ", offset + TAB_WIDTH);
-    std::cout << '<' << names[node.column] << " (" << node.samples << ")>\n";
+    std::cout << '<' << self.names[node.column].data
+              << " (" << node.samples << ")>\n";
+
+    offset += 2 * TAB_WIDTH;
 
     for (size_t i = 0; i < node.count; i++)
-      print(node.children[i], i, offset + 2 * TAB_WIDTH);
+    {
+      putsn(" ", offset);
+      std::cout << i << ':';
+
+      print(self, node.children[i], offset);
+    }
   }
   else
   {
@@ -275,87 +334,16 @@ void DecisionTree::print(const Node &node, size_t category, int offset) const
   }
 }
 
-double DecisionTree::compute_entropy_after_split(
-  size_t attr, const Data &data, const size_t *start, const size_t *end
-  ) const
+void print(const DecisionTree &self)
 {
-  size_t const rows = categories[attr].count,
-    cols = categories[goal].count;
+  std::cout << "<"
+            << self.names[self.root->column].data
+            << " (" << self.root->samples << ")>\n";
 
-  std::memset(
-    data.theader, 0, rows * sizeof (size_t)
-    );
-  std::memset(
-    data.samples, 0, cols * rows * sizeof (size_t)
-    );
-
-  size_t const samples_count = end - start;
-
-  // Reused "start", be careful.
-  while (start < end)
+  for (size_t i = 0; i < self.root->count; i++)
   {
-    size_t const row = to_category(data.table, attr, *start),
-      col = to_category(data.table, goal, *start);
-
-    data.samples[row * cols + col]++;
-    data.theader[row]++;
-    start++;
+    putsn(" ", TAB_WIDTH);
+    std::cout << i << ':';
+    print(self, self.root->children[i], TAB_WIDTH);
   }
-
-  double mean_entropy = 0;
-
-  for (size_t i = 0; i < rows; i++)
-  {
-    size_t const samples_in_category = data.theader[i];
-    size_t const offset = i * cols;
-
-    double entropy = 0;
-
-    // Compute "entropy * samples_in_category", not just entropy.
-    for (size_t j = 0; j < cols; j++)
-    {
-      double const samples = data.samples[offset + j];
-
-      if (samples != 0)
-      {
-        entropy +=
-          samples * std::log(samples / samples_in_category) / std::log(2);
-      }
-    }
-
-    mean_entropy += entropy / samples_count;
-  }
-
-  return -mean_entropy;
-}
-
-size_t DecisionTree::to_category(
-  const Table &table, size_t column, size_t row
-  ) const
-{
-  auto &category = categories[column];
-  auto &attr = table.columns[column];
-
-  switch (attr.type)
-  {
-  case Table::Attribute::CATEGORY:
-    return attr.as.category.data[row];
-  case Table::Attribute::INT32:
-  {
-    int32_t const value = attr.as.int32s[row];
-
-    if (category.as.int32.values != nullptr)
-      return category.as.int32.values->find(value)->second;
-    else
-      return binary_search_interval(value, category.as.int32.bins, BINS_COUNT);
-  }
-  case Table::Attribute::FLOAT64:
-    return binary_search_interval(
-      attr.as.float64s[row], category.as.float64.bins, BINS_COUNT
-      );
-  case Table::Attribute::INTERVAL:
-    return category.as.interval->find(attr.as.intervals[row])->second;
-  }
-
-  return INVALID_CATEGORY;
 }

@@ -15,8 +15,8 @@ void putsn(const char *string, size_t count);
 */
 size_t binary_search_interval(double value, const double *array, size_t size);
 
-const char *parse_int32(const char *str, int32_t &val);
+int64_t read_int64(const char *&str);
 
-const char *parse_float64(const char *str, double &val);
+double read_float64(const char *&str);
 
 #endif // UTILS_HPP

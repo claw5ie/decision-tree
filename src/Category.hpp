@@ -2,6 +2,7 @@
 #define CATEGORY_HPP
 
 #include <map>
+#include "String.hpp"
 #include "Table.hpp"
 
 #define INTEGER_CATEGORY_LIMIT 7u
@@ -9,31 +10,33 @@
 
 struct Category
 {
-  Table::Attribute::Type type;
+  Attribute::Type type;
 
   union
   {
-    std::map<std::string, CategoryValue> *category;
+    std::map<String, size_t, StringComparator> *string;
 
     struct
     {
-      std::map<int32_t, CategoryValue> *values;
+      std::map<int64_t, size_t> *map;
       double *bins;
-    } int32;
+    } int64;
 
     struct
     {
       double *bins;
     } float64;
 
-    std::map<Interval, CategoryValue> *interval;
+    std::map<Interval, size_t> *interval;
   } as;
 
   size_t count;
-
-  void discretize(const Table &table, size_t column);
-
-  void clean();
 };
+
+Category discretize(const Table &table, size_t column);
+
+void clean(Category &category);
+
+size_t to_category(const Category &self, const Attribute::Value &value);
 
 #endif // CATEGORY_HPP

@@ -84,6 +84,32 @@ void construct(
       return -mean_entropy;
     };
 
+  auto const find_best_goal_category =
+    [&self, &cons](size_t start, size_t end)
+    {
+      size_t best_goal_category = size_t(-1);
+      size_t best_samples_count = 0;
+
+      // Reusing temporary header.
+      std::memset(
+        cons.theader, 0, self.categories[self.goal].count * sizeof (size_t)
+        );
+
+      for (size_t i = start; i < end; i++)
+      {
+        size_t const index = at_column_major(cons.table, self.goal, cons.rows[i]);
+        size_t const value = ++cons.theader[index];
+
+        if (best_samples_count < value)
+        {
+          best_samples_count = value;
+          best_goal_category = index;
+        }
+      }
+
+      return best_goal_category;
+    };
+
   if (mut.end - mut.start <= cons.threshold)
     return;
 
@@ -111,29 +137,12 @@ void construct(
   }
 
   size_t const category_count = self.categories[best_attribute].count;
-  size_t best_goal_category = size_t(-1);
-
-  // Reusing temporary header.
-  std::memset(
-    cons.theader, 0, self.categories[self.goal].count * sizeof (size_t)
-    );
-
-  for (size_t i = mut.start, best_samples_count = 0; i < mut.end; i++)
-  {
-    size_t const index = at_column_major(cons.table, self.goal, cons.rows[i]);
-    size_t const value = ++cons.theader[index];
-
-    if (best_samples_count < value)
-    {
-      best_samples_count = value;
-      best_goal_category = index;
-    }
-  }
 
   // No columns to process.
   if (best_attribute == size_t(-1))
   {
-    mut.node = { best_goal_category, nullptr, 0, mut.end - mut.start };
+    mut.node = { find_best_goal_category(mut.start, mut.end),
+                 nullptr, 0, mut.end - mut.start };
 
     return;
   }
@@ -152,7 +161,18 @@ void construct(
     offsets[i + 1] = offsets[i] + samples;
 
     if (samples <= cons.threshold)
-      mut.node.children[i] = { best_goal_category, nullptr, 0, samples };
+    {
+      size_t const category = samples != 0 ?
+        find_best_goal_category(offsets[i], offsets[i + 1]) :
+        find_best_goal_category(mut.start, mut.end);
+
+      mut.node.children[i] = {
+        category,
+        nullptr,
+        0,
+        samples
+      };
+    }
   }
 
   std::sort(

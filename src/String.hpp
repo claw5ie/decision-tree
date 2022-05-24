@@ -12,7 +12,7 @@ struct String
 
 struct StringComparator
 {
-  bool operator()(const String &left, const String &right);
+  bool operator()(const String &left, const String &right) const;
 };
 
 int32_t compare(const String &left, const String &right);

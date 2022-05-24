@@ -1,7 +1,7 @@
 #include <cstring>
 #include "String.hpp"
 
-bool StringComparator::operator()(const String &left, const String &right)
+bool StringComparator::operator()(const String &left, const String &right) const
 {
   return compare(left, right) < 0;
 }

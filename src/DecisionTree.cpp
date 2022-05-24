@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <cassert>
 #include "Mat.hpp"
 #include "DecisionTree.hpp"
 
@@ -34,8 +35,8 @@ void construct(
   auto const compute_entropy_after_split =
     [&self, &cons](size_t attr, const size_t *start, const size_t *end) -> double
     {
-      cons.samples.rows = self.categories[attr].count;
-      cons.samples.cols = self.categories[self.goal].count;
+      cons.samples.rows = self.categories[attr]->count();
+      cons.samples.cols = self.categories[self.goal]->count();
 
       std::memset(
         cons.theader, 0, cons.samples.rows * sizeof (size_t)
@@ -92,7 +93,7 @@ void construct(
 
       // Reusing temporary header.
       std::memset(
-        cons.theader, 0, self.categories[self.goal].count * sizeof (size_t)
+        cons.theader, 0, self.categories[self.goal]->count() * sizeof (size_t)
         );
 
       for (size_t i = start; i < end; i++)
@@ -106,6 +107,8 @@ void construct(
           best_goal_category = index;
         }
       }
+
+      assert(best_goal_category != size_t(-1));
 
       return best_goal_category;
     };
@@ -136,8 +139,6 @@ void construct(
     }
   }
 
-  size_t const category_count = self.categories[best_attribute].count;
-
   // No columns to process.
   if (best_attribute == size_t(-1))
   {
@@ -146,6 +147,8 @@ void construct(
 
     return;
   }
+
+  size_t const category_count = self.categories[best_attribute]->count();
 
   mut.node.column = best_attribute;
   mut.node.children = new DecisionTree::Node[category_count];
@@ -158,6 +161,7 @@ void construct(
   for (size_t i = 0; i < category_count; i++)
   {
     size_t const samples = cons.header[i];
+
     offsets[i + 1] = offsets[i] + samples;
 
     if (samples <= cons.threshold)
@@ -204,7 +208,7 @@ void construct(
 DecisionTree construct(const Table &table, const DecisionTree::Params &params)
 {
   DecisionTree tree = {
-    new Category[table.cols],
+    new Category *[table.cols],
     new String[table.cols],
     table.cols,
     params.goal,
@@ -215,10 +219,12 @@ DecisionTree construct(const Table &table, const DecisionTree::Params &params)
 
   for (size_t i = 0; i < table.cols; i++)
   {
-    tree.categories[i] = discretize(table, i);
-    tree.names[i] = copy(table.columns[i].name);
+    auto &column = table.columns[i];
+
+    (tree.categories[i] = new_category(column.type))->discretize(table, column);
+    tree.names[i] = copy(column.name);
     max_rows_count =
-      std::max(max_rows_count, tree.categories[i].count);
+      std::max(max_rows_count, tree.categories[i]->count());
   }
 
   size_t offsets[6];
@@ -229,7 +235,7 @@ DecisionTree construct(const Table &table, const DecisionTree::Params &params)
     table.cols * table.rows * sizeof (size_t),
     max_rows_count * sizeof (size_t),
     max_rows_count * sizeof (size_t),
-    max_rows_count * tree.categories[tree.goal].count * sizeof (size_t),
+    max_rows_count * tree.categories[tree.goal]->count() * sizeof (size_t),
     table.cols * sizeof (bool),
     table.rows * sizeof (size_t)
     );
@@ -251,7 +257,7 @@ DecisionTree construct(const Table &table, const DecisionTree::Params &params)
     for (size_t j = 0; j < table.rows; j++)
     {
       at_column_major(cons_data.table, i, j) =
-        to_category(category, get(table, i, j));
+        category->to_category(get(table, i, j));
     }
   }
 
@@ -283,7 +289,7 @@ void clean(DecisionTree &self)
 {
   for (size_t i = 0; i < self.count; i++)
   {
-    clean(self.categories[i]);
+    self.categories[i]->clean();
     delete[] self.names[i].data;
   }
 
@@ -339,7 +345,7 @@ void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
     for (size_t i = 0; i < node.count; i++)
     {
       putsn(" ", offset);
-      print_from_category(self.categories[node.column], i);
+      self.categories[node.column]->print_from_category(i);
       std::cout << ':';
 
       print(self, node.children[i], offset);
@@ -348,7 +354,7 @@ void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
   else
   {
     std::cout << ' ';
-    print_from_category(self.categories[self.goal], node.column);
+    self.categories[self.goal]->print_from_category(node.column);
     std::cout << " ("
               << node.samples
               << ")\n";

@@ -27,30 +27,6 @@ void putsn(const char *string, size_t count)
     std::cout << string;
 }
 
-size_t binary_search_interval(
-  double value, const double *array, size_t size
-  )
-{
-  assert(size >= 2);
-
-  size_t lower = 0,
-    upper = size - 1;
-
-  while (lower < upper)
-  {
-    size_t const mid = lower + (upper - lower) / 2;
-
-    if (value < array[mid])
-      upper = mid;
-    else if (value >= array[mid + 1])
-      lower = mid + 1;
-    else
-      return mid;
-  }
-
-  return size - 2;
-}
-
 int64_t read_int64(const char *&str)
 {
   bool const should_be_negative = *str == '-';

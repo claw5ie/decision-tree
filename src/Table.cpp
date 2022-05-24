@@ -6,14 +6,6 @@
 #include "Table.hpp"
 #include "Utils.hpp"
 
-bool operator<(const Interval &left, const Interval &right)
-{
-  if (left.min >= right.min)
-    return left.max < right.max;
-  else
-    return true;
-}
-
 bool is_delimiter(char ch)
 {
   return ch == ',' || ch == '\n' || ch == '\0';

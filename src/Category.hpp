@@ -10,48 +10,84 @@
 
 struct Category
 {
-  Attribute::Type type;
+  virtual void discretize(const Table &table, const Attribute &column) = 0;
 
-  union
-  {
-    struct
-    {
-      std::map<String, size_t, StringComparator> *to;
-      String *from;
-    } string;
+  virtual void clean() = 0;
 
-    struct
-    {
-      struct
-      {
-        std::map<int64_t, size_t> *to;
-        int64_t *from;
-      } maps;
+  virtual size_t count() const = 0;
 
-      double *bins;
-    } int64;
+  virtual size_t to_category(const Attribute::Value &value) const = 0;
 
-    struct
-    {
-      double *bins;
-    } float64;
-
-    struct
-    {
-      std::map<Interval, size_t> *to;
-      Interval *from;
-    } interval;
-  } as;
-
-  size_t count;
+  virtual void print_from_category(size_t category) const = 0;
 };
 
-Category discretize(const Table &table, size_t column);
+namespace CategoryKind
+{
+  struct StringKind: public Category
+  {
+    std::map<String, size_t, StringComparator> to;
+    String *from;
 
-void clean(Category &category);
+    void discretize(const Table &table, const Attribute &column);
 
-size_t to_category(const Category &self, const Attribute::Value &value);
+    void clean();
 
-void print_from_category(const Category &self, size_t category);
+    size_t count() const;
+
+    size_t to_category(const Attribute::Value &value) const;
+
+    void print_from_category(size_t category) const;
+  };
+
+  struct Int64: public Category
+  {
+    std::map<int64_t, size_t> to;
+    int64_t *from;
+    SearchInterval interval;
+
+    void discretize(const Table &table, const Attribute &column);
+
+    void clean();
+
+    size_t count() const;
+
+    size_t to_category(const Attribute::Value &value) const;
+
+    void print_from_category(size_t category) const;
+  };
+
+  struct Float64: public Category
+  {
+    SearchInterval interval;
+
+    void discretize(const Table &table, const Attribute &column);
+
+    void clean();
+
+    size_t count() const;
+
+    size_t to_category(const Attribute::Value &value) const;
+
+    void print_from_category(size_t category) const;
+  };
+
+  struct IntervalKind: public Category
+  {
+    std::map<Interval, size_t> to;
+    Interval *from;
+
+    void discretize(const Table &table, const Attribute &column);
+
+    void clean();
+
+    size_t count() const;
+
+    size_t to_category(const Attribute::Value &value) const;
+
+    void print_from_category(size_t category) const;
+  };
+}
+
+Category *new_category(Attribute::Type type);
 
 #endif // CATEGORY_HPP

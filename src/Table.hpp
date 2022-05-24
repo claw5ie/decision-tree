@@ -3,14 +3,7 @@
 
 #include <map>
 #include "String.hpp"
-
-struct Interval
-{
-  double min,
-    max;
-};
-
-bool operator<(const Interval &left, const Interval &right);
+#include "Intervals.hpp"
 
 struct Attribute
 {

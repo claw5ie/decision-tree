@@ -26,7 +26,7 @@ struct DecisionTree
     size_t columns_count;
   };
 
-  Category *categories;
+  Category **categories;
   String *names;
   size_t count;
   size_t goal;

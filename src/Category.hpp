@@ -14,11 +14,20 @@ struct Category
 
   union
   {
-    std::map<String, size_t, StringComparator> *string;
+    struct
+    {
+      std::map<String, size_t, StringComparator> *to;
+      String *from;
+    } string;
 
     struct
     {
-      std::map<int64_t, size_t> *map;
+      struct
+      {
+        std::map<int64_t, size_t> *to;
+        int64_t *from;
+      } maps;
+
       double *bins;
     } int64;
 
@@ -27,7 +36,11 @@ struct Category
       double *bins;
     } float64;
 
-    std::map<Interval, size_t> *interval;
+    struct
+    {
+      std::map<Interval, size_t> *to;
+      Interval *from;
+    } interval;
   } as;
 
   size_t count;
@@ -38,5 +51,7 @@ Category discretize(const Table &table, size_t column);
 void clean(Category &category);
 
 size_t to_category(const Category &self, const Attribute::Value &value);
+
+void print_from_category(const Category &self, size_t category);
 
 #endif // CATEGORY_HPP

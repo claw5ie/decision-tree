@@ -310,25 +310,26 @@ void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
   if (node.count != 0)
   {
     std::cout << '\n';
-    putsn(" ", offset + TAB_WIDTH);
+    putsn(" ", offset);
     std::cout << '<' << self.names[node.column].data
               << " (" << node.samples << ")>\n";
 
-    offset += 2 * TAB_WIDTH;
+    offset += TAB_WIDTH;
 
     for (size_t i = 0; i < node.count; i++)
     {
       putsn(" ", offset);
-      std::cout << i << ':';
+      print_from_category(self.categories[node.column], i);
+      std::cout << ':';
 
       print(self, node.children[i], offset);
     }
   }
   else
   {
-    std::cout << ' '
-              << node.column
-              << " ("
+    std::cout << ' ';
+    print_from_category(self.categories[self.goal], node.column);
+    std::cout << " ("
               << node.samples
               << ")\n";
   }
@@ -336,14 +337,5 @@ void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
 
 void print(const DecisionTree &self)
 {
-  std::cout << "<"
-            << self.names[self.root->column].data
-            << " (" << self.root->samples << ")>\n";
-
-  for (size_t i = 0; i < self.root->count; i++)
-  {
-    putsn(" ", TAB_WIDTH);
-    std::cout << i << ':';
-    print(self, self.root->children[i], TAB_WIDTH);
-  }
+  print(self, *self.root, 0);
 }

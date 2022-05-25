@@ -49,9 +49,15 @@ struct Table
     rows;
 };
 
-Attribute::Value get(const Table &self, size_t column, size_t row);
+const char *to_string(Attribute::Type type);
+
+void find_table_size(const char *string, size_t &rows, size_t &cols);
+
+Attribute::Value read_attribute_value(const char *&str);
 
 Table read_csv(const char *filepath);
+
+Attribute::Value get(const Table &self, size_t column, size_t row);
 
 void clean(Table &self);
 

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cassert>
 #include "Mat.hpp"
+#include "Utils.hpp"
 #include "DecisionTree.hpp"
 
 struct ConstTreeData
@@ -300,36 +301,74 @@ void clean(DecisionTree &self)
   delete self.root;
 }
 
-// Data *parse_samples(cons char *samples) const
-// {
-//   return nullptr;
-// }
+Samples read_samples_from_string(const char *string)
+{
+  Samples samples;
 
-// size_t classify(const Samples *sample) const
-// {
-//   const Node *curr = &root;
+  find_table_size(string, samples.rows, samples.cols);
 
-//   while (curr->children != nullptr)
-//   {
-//     size_t const category =
-//       categories[curr->column].to_category(sample[curr->column]);
+  samples.data = new Attribute::Value[samples.cols * samples.rows];
 
-//     if (category < curr->count)
-//     {
-//       curr = curr->children + category;
-//     }
-//     else
-//     {
-//       std::cerr << "ERROR: cannot classify the sample: value at column "
-//                 << curr->column
-//                 << " doesn't fit into any category.\n";
+  for (size_t i = 0; i < samples.rows; i++)
+  {
+    for (size_t j = 0; j < samples.cols; j++)
+    {
+      samples.data[i * samples.cols + j] = read_attribute_value(string);
 
-//       return size_t(-1);
-//     }
-//   }
+      if (j + 1 < samples.cols)
+        require_char(*string, ',');
+      else if (i + 1 < samples.rows)
+        require_char(*string, '\n');
+      else
+        require_char(*string, '\0');
 
-//   return curr->column;
-// }
+      string += *string != '\0';
+    }
+  }
+
+  return samples;
+}
+
+void clean(Samples &self)
+{
+  for (size_t i = 0; i < self.cols * self.rows; i++)
+  {
+    if (self.data[i].type == Attribute::STRING)
+      delete[] self.data[i].as.string.data;
+  }
+
+  delete[] self.data;
+}
+
+size_t classify(const DecisionTree &self, const Attribute::Value *sample)
+{
+  const DecisionTree::Node *curr = self.root;
+
+  while (curr->count > 0)
+  {
+    size_t const category =
+      self.categories[curr->column]->to_category(sample[curr->column]);
+
+    if (category < curr->count)
+      curr = curr->children + category;
+    else
+      return size_t(-1);
+  }
+
+  return curr->column;
+}
+
+size_t *classify(const DecisionTree &self, const Samples &samples)
+{
+  assert(self.count == samples.cols);
+
+  size_t *const classes = new size_t[samples.rows];
+
+  for (size_t i = 0; i < samples.rows; i++)
+    classes[i] = classify(self, samples.data + i * samples.cols);
+
+  return classes;
+}
 
 void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
 {
@@ -364,4 +403,9 @@ void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
 void print(const DecisionTree &self)
 {
   print(self, *self.root, 0);
+}
+
+void print_goal_category(const DecisionTree &self, size_t category)
+{
+  self.categories[self.goal]->print_from_category(category);
 }

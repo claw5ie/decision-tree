@@ -1,6 +1,8 @@
 #include <iostream>
+#include <fstream>
 #include <cstdarg>
 #include <cassert>
+#include "sys/stat.h"
 #include "Utils.hpp"
 
 char *allocate_in_chunks(size_t *offsets, size_t count, ...)
@@ -65,4 +67,52 @@ double read_float64(const char *&str)
     val = -val;
 
   return val;
+}
+
+void require_char(char actual, char expected)
+{
+  if (expected != actual)
+  {
+    std::cerr << "ERROR: expected character `"
+              << expected
+              << "`, but got `"
+              << actual
+              << "`\n";
+    std::exit(EXIT_FAILURE);
+  }
+}
+
+char *read_entire_file(const char *filepath)
+{
+  size_t file_size = 0;
+
+  {
+    struct stat stats;
+
+    if (stat(filepath, &stats) == -1)
+    {
+      std::cerr << "ERROR: failed to stat the file `"
+                << filepath
+                << "`.\n";
+      std::exit(EXIT_FAILURE);
+    }
+
+    file_size = stats.st_size;
+  }
+
+  char *const file_data = new char[file_size + 1];
+
+  std::fstream file(filepath, std::fstream::in);
+
+  if (!file.is_open())
+  {
+    std::cerr << "ERROR: failed to open the file `" << filepath << "`.\n";
+    std::exit(EXIT_FAILURE);
+  }
+
+  file.read(file_data, file_size);
+  file_data[file_size] = '\0';
+  file.close();
+
+  return file_data;
 }

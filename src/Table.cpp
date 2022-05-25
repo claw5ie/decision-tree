@@ -6,6 +6,38 @@
 #include "Table.hpp"
 #include "Utils.hpp"
 
+const char *to_string(Attribute::Type type)
+{
+  static const char *const lookup[] = {
+    "String",
+    "Int64",
+    "Float64",
+    "Interval"
+  };
+
+  return type < sizeof (lookup) / (sizeof (*lookup)) ? lookup[type] : nullptr;
+}
+
+void find_table_size(const char *string, size_t &rows, size_t &cols)
+{
+  cols = 1;
+  rows = 1;
+
+  // Count columns.
+  while (*string != '\n' && *string != '\0')
+  {
+    cols += *string == ',';
+    string++;
+  }
+
+  // Count rows.
+  while (*string != '\0')
+  {
+    rows += *string == '\n';
+    string++;
+  }
+}
+
 bool is_delimiter(char ch)
 {
   return ch == ',' || ch == '\n' || ch == '\0';
@@ -120,6 +152,8 @@ Attribute::Value read_attribute_value(const char *&str)
 
 Attribute::Value get(const Table &self, size_t col, size_t row)
 {
+  assert(col < self.cols && row < self.rows);
+
   auto &column = self.columns[col];
   Attribute::Value value;
 
@@ -146,62 +180,15 @@ Attribute::Value get(const Table &self, size_t col, size_t row)
 
 Table read_csv(const char *filepath)
 {
-  char *const file_data =
-    [filepath]() -> char *
-    {
-      size_t file_size = 0;
+  char *const file_data = read_entire_file(filepath);
 
-      {
-        struct stat stats;
+  size_t cols;
+  size_t rows;
 
-        if (stat(filepath, &stats) == -1)
-        {
-          std::cerr << "ERROR: failed to stat the file `"
-                    << filepath
-                    << "`.\n";
-          std::exit(EXIT_FAILURE);
-        }
+  find_table_size(file_data, rows, cols);
 
-        file_size = stats.st_size;
-      }
-
-      char *const file_data = new char[file_size + 1];
-
-      std::fstream file(filepath, std::fstream::in);
-
-      if (!file.is_open())
-      {
-        std::cerr << "ERROR: failed to open the file `" << filepath << "`.\n";
-        std::exit(EXIT_FAILURE);
-      }
-
-      file.read(file_data, file_size);
-      file_data[file_size] = '\0';
-      file.close();
-
-      return file_data;
-    }();
-
-  size_t rows = 0;
-  size_t cols = 1;
-
-  {
-    const char *ch = file_data;
-
-    // Count columns.
-    while (*ch != '\n' && *ch != '\0')
-    {
-      cols += *ch == ',';
-      ch++;
-    }
-
-    // Count rows. First line is not counted.
-    while (*ch != '\0')
-    {
-      rows += *ch == '\n';
-      ch++;
-    }
-  }
+  // Exclude the first row.
+  --rows;
 
   Attribute *const columns = new Attribute[cols]{ };
 
@@ -215,9 +202,9 @@ Table read_csv(const char *filepath)
       curr++;
 
     if (i + 1 < cols)
-      assert(*curr == ',');
+      require_char(*curr, ',');
     else
-      assert(*curr == '\n');
+      require_char(*curr, '\n');
 
     columns[i].name = copy(start, curr);
     curr += *curr != '\0';
@@ -257,7 +244,20 @@ Table read_csv(const char *filepath)
         }
       }
 
-      assert(column.type == value.type);
+      if (column.type != value.type)
+      {
+        std::cerr << "ERROR: value at column "
+                  << j + 1
+                  << ", row "
+                  << i + 2
+                  << " expects to see `"
+                  << to_string(column.type)
+                  << "`, but got `"
+                  << to_string(value.type)
+                  << "`.\n  Note: different types of values in the same column "
+          "are not allowed.\n";
+        std::exit(EXIT_FAILURE);
+      }
 
       switch (column.type)
       {
@@ -276,11 +276,11 @@ Table read_csv(const char *filepath)
       }
 
       if (j + 1 < cols)
-        assert(*curr == ',');
+        require_char(*curr, ',');
       else if (i + 1 < rows)
-        assert(*curr == '\n');
+        require_char(*curr, '\n');
       else
-        assert(*curr == '\0');
+        require_char(*curr, '\0');
 
       curr += *curr != '\0';
     }

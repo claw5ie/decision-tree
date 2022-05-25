@@ -206,7 +206,9 @@ void construct(
   delete[] offsets;
 }
 
-DecisionTree construct(const Table &table, const DecisionTree::Params &params)
+DecisionTree construct(
+  const TableColumnMajor &table, const DecisionTree::Params &params
+  )
 {
   DecisionTree tree = {
     new Category *[table.cols],
@@ -301,45 +303,6 @@ void clean(DecisionTree &self)
   delete self.root;
 }
 
-Samples read_samples_from_string(const char *string)
-{
-  Samples samples;
-
-  find_table_size(string, samples.rows, samples.cols);
-
-  samples.data = new Attribute::Value[samples.cols * samples.rows];
-
-  for (size_t i = 0; i < samples.rows; i++)
-  {
-    for (size_t j = 0; j < samples.cols; j++)
-    {
-      samples.data[i * samples.cols + j] = read_attribute_value(string);
-
-      if (j + 1 < samples.cols)
-        require_char(*string, ',');
-      else if (i + 1 < samples.rows)
-        require_char(*string, '\n');
-      else
-        require_char(*string, '\0');
-
-      string += *string != '\0';
-    }
-  }
-
-  return samples;
-}
-
-void clean(Samples &self)
-{
-  for (size_t i = 0; i < self.cols * self.rows; i++)
-  {
-    if (self.data[i].type == Attribute::STRING)
-      delete[] self.data[i].as.string.data;
-  }
-
-  delete[] self.data;
-}
-
 size_t classify(const DecisionTree &self, const Attribute::Value *sample)
 {
   const DecisionTree::Node *curr = self.root;
@@ -358,7 +321,7 @@ size_t classify(const DecisionTree &self, const Attribute::Value *sample)
   return curr->column;
 }
 
-size_t *classify(const DecisionTree &self, const Samples &samples)
+size_t *classify(const DecisionTree &self, const TableRowMajor &samples)
 {
   assert(self.count == samples.cols);
 

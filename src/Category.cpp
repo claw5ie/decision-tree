@@ -4,7 +4,7 @@
 #include "Category.hpp"
 
 void CategoryKind::StringKind::discretize(
-  const Table &table, const Attribute &column
+  const TableColumnMajor &table, const TableColumnMajor::Column &column
   )
 {
   assert(column.type == Attribute::STRING);
@@ -23,7 +23,9 @@ void CategoryKind::StringKind::discretize(
     from[elem.second] = elem.first;
 }
 
-void CategoryKind::Int64::discretize(const Table &table, const Attribute &column)
+void CategoryKind::Int64::discretize(
+  const TableColumnMajor &table, const TableColumnMajor::Column &column
+  )
 {
   assert(column.type == Attribute::INT64);
 
@@ -57,7 +59,9 @@ void CategoryKind::Int64::discretize(const Table &table, const Attribute &column
   }
 }
 
-void CategoryKind::Float64::discretize(const Table &table, const Attribute &column)
+void CategoryKind::Float64::discretize(
+  const TableColumnMajor &table, const TableColumnMajor::Column &column
+  )
 {
   assert(column.type == Attribute::FLOAT64);
 
@@ -76,7 +80,7 @@ void CategoryKind::Float64::discretize(const Table &table, const Attribute &colu
 }
 
 void CategoryKind::IntervalKind::discretize(
-  const Table &table, const Attribute &column
+  const TableColumnMajor &table, const TableColumnMajor::Column &column
   )
 {
   assert(column.type == Attribute::INTERVAL);

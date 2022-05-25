@@ -10,7 +10,9 @@
 
 struct Category
 {
-  virtual void discretize(const Table &table, const Attribute &column) = 0;
+  virtual void discretize(
+    const TableColumnMajor &table, const TableColumnMajor::Column &column
+    ) = 0;
 
   virtual void clean() = 0;
 
@@ -28,7 +30,9 @@ namespace CategoryKind
     std::map<String, size_t, StringComparator> to;
     String *from;
 
-    void discretize(const Table &table, const Attribute &column);
+    void discretize(
+      const TableColumnMajor &table, const TableColumnMajor::Column &column
+      );
 
     void clean();
 
@@ -45,7 +49,9 @@ namespace CategoryKind
     int64_t *from;
     SearchInterval interval;
 
-    void discretize(const Table &table, const Attribute &column);
+    void discretize(
+      const TableColumnMajor &table, const TableColumnMajor::Column &column
+      );
 
     void clean();
 
@@ -60,7 +66,9 @@ namespace CategoryKind
   {
     SearchInterval interval;
 
-    void discretize(const Table &table, const Attribute &column);
+    void discretize(
+      const TableColumnMajor &table, const TableColumnMajor::Column &column
+      );
 
     void clean();
 
@@ -76,7 +84,9 @@ namespace CategoryKind
     std::map<Interval, size_t> to;
     Interval *from;
 
-    void discretize(const Table &table, const Attribute &column);
+    void discretize(
+      const TableColumnMajor &table, const TableColumnMajor::Column &column
+      );
 
     void clean();
 

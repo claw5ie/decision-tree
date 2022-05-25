@@ -33,24 +33,15 @@ struct DecisionTree
   Node *root;
 };
 
-struct Samples
-{
-  Attribute::Value *data;
-  size_t rows,
-    cols;
-};
-
-DecisionTree construct(const Table &table, const DecisionTree::Params &params);
-
-void print_goal_category(const DecisionTree &self, size_t category);
+DecisionTree construct(
+  const TableColumnMajor &table, const DecisionTree::Params &params
+  );
 
 void clean(DecisionTree &self);
 
-Samples read_samples_from_string(const char *string);
+void print_goal_category(const DecisionTree &self, size_t category);
 
-void clean(Samples &samples);
-
-size_t *classify(const DecisionTree &self, const Samples &samples);
+size_t *classify(const DecisionTree &self, const TableRowMajor &samples);
 
 void print(const DecisionTree &self);
 

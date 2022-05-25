@@ -18,26 +18,6 @@ const char *to_string(Attribute::Type type)
   return type < sizeof (lookup) / (sizeof (*lookup)) ? lookup[type] : nullptr;
 }
 
-void find_table_size(const char *string, size_t &rows, size_t &cols)
-{
-  cols = 1;
-  rows = 1;
-
-  // Count columns.
-  while (*string != '\n' && *string != '\0')
-  {
-    cols += *string == ',';
-    string++;
-  }
-
-  // Count rows.
-  while (*string != '\0')
-  {
-    rows += *string == '\n';
-    string++;
-  }
-}
-
 bool is_delimiter(char ch)
 {
   return ch == ',' || ch == '\n' || ch == '\0';
@@ -150,35 +130,27 @@ Attribute::Value read_attribute_value(const char *&str)
   return value;
 }
 
-Attribute::Value get(const Table &self, size_t col, size_t row)
+void find_table_size(const char *string, size_t &rows, size_t &cols)
 {
-  assert(col < self.cols && row < self.rows);
+  cols = 1;
+  rows = 1;
 
-  auto &column = self.columns[col];
-  Attribute::Value value;
-
-  value.type = column.type;
-
-  switch (column.type)
+  // Count columns.
+  while (*string != '\n' && *string != '\0')
   {
-  case Attribute::STRING:
-    value.as.string = column.as.strings[row];
-    break;
-  case Attribute::INT64:
-    value.as.int64 = column.as.int64s[row];
-    break;
-  case Attribute::FLOAT64:
-    value.as.float64 = column.as.float64s[row];
-    break;
-  case Attribute::INTERVAL:
-    value.as.interval = column.as.intervals[row];
-    break;
+    cols += *string == ',';
+    string++;
   }
 
-  return value;
+  // Count rows.
+  while (*string != '\0')
+  {
+    rows += *string == '\n';
+    string++;
+  }
 }
 
-Table read_csv(const char *filepath)
+TableColumnMajor read_csv_column_major(const char *filepath)
 {
   char *const file_data = read_entire_file(filepath);
 
@@ -190,7 +162,7 @@ Table read_csv(const char *filepath)
   // Exclude the first row.
   --rows;
 
-  Attribute *const columns = new Attribute[cols]{ };
+  auto *const columns = new TableColumnMajor::Column[cols]{ };
 
   const char *curr = file_data;
 
@@ -291,7 +263,7 @@ Table read_csv(const char *filepath)
   return { columns, cols, rows };
 }
 
-void clean(Table &self)
+void clean(const TableColumnMajor &self)
 {
   for (size_t i = 0; i < self.cols; i++)
   {
@@ -321,7 +293,35 @@ void clean(Table &self)
   delete[] self.columns;
 }
 
-void print(const Table &self)
+Attribute::Value get(const TableColumnMajor &self, size_t col, size_t row)
+{
+  assert(col < self.cols && row < self.rows);
+
+  auto &column = self.columns[col];
+  Attribute::Value value;
+
+  value.type = column.type;
+
+  switch (column.type)
+  {
+  case Attribute::STRING:
+    value.as.string = column.as.strings[row];
+    break;
+  case Attribute::INT64:
+    value.as.int64 = column.as.int64s[row];
+    break;
+  case Attribute::FLOAT64:
+    value.as.float64 = column.as.float64s[row];
+    break;
+  case Attribute::INTERVAL:
+    value.as.interval = column.as.intervals[row];
+    break;
+  }
+
+  return value;
+}
+
+void print(const TableColumnMajor &self)
 {
   for (size_t i = 0; i < self.cols; i++)
   {
@@ -352,4 +352,48 @@ void print(const Table &self)
       std::cout << (j + 1 < self.rows ? ' ' : '\n');
     }
   }
+}
+
+TableRowMajor read_csv_row_major(const char *filepath)
+{
+  char *const file_data = read_entire_file(filepath);
+  const char *curr = file_data;
+
+  TableRowMajor table;
+
+  find_table_size(curr, table.rows, table.cols);
+
+  table.data = new Attribute::Value[table.cols * table.rows];
+
+  for (size_t i = 0; i < table.rows; i++)
+  {
+    for (size_t j = 0; j < table.cols; j++)
+    {
+      table.data[i * table.cols + j] = read_attribute_value(curr);
+
+      if (j + 1 < table.cols)
+        require_char(*curr, ',');
+      else if (i + 1 < table.rows)
+        require_char(*curr, '\n');
+      else
+        require_char(*curr, '\0');
+
+      curr += *curr != '\0';
+    }
+  }
+
+  delete[] file_data;
+
+  return table;
+}
+
+void clean(const TableRowMajor &self)
+{
+  for (size_t i = 0; i < self.cols * self.rows; i++)
+  {
+    if (self.data[i].type == Attribute::STRING)
+      delete[] self.data[i].as.string.data;
+  }
+
+  delete[] self.data;
 }

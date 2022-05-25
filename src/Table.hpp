@@ -5,7 +5,7 @@
 #include "String.hpp"
 #include "Intervals.hpp"
 
-struct Attribute
+namespace Attribute
 {
   enum Type
   {
@@ -27,40 +27,55 @@ struct Attribute
       Interval interval;
     } as;
   };
+}
 
-  Type type;
+const char *to_string(Attribute::Type type);
 
-  union
-  {
-    String *strings;
-    int64_t *int64s;
-    double *float64s;
-    Interval *intervals;
-  } as;
-
-  String name;
-  bool is_initialized;
-};
-
-struct Table
+struct TableColumnMajor
 {
-  Attribute *columns;
+  struct Column
+  {
+    Attribute::Type type;
+
+    union
+    {
+      String *strings;
+      int64_t *int64s;
+      double *float64s;
+      Interval *intervals;
+    } as;
+
+    String name;
+    bool is_initialized;
+  };
+
+  Column *columns;
   size_t cols,
     rows;
 };
 
-const char *to_string(Attribute::Type type);
+TableColumnMajor read_csv_column_major(const char *filepath);
 
-void find_table_size(const char *string, size_t &rows, size_t &cols);
+void clean(const TableColumnMajor &self);
 
-Attribute::Value read_attribute_value(const char *&str);
+Attribute::Value get(const TableColumnMajor &self, size_t column, size_t row);
 
-Table read_csv(const char *filepath);
+void print(const TableColumnMajor &self);
 
-Attribute::Value get(const Table &self, size_t column, size_t row);
+struct TableRowMajor
+{
+  Attribute::Value *data;
+  size_t rows,
+    cols;
+};
 
-void clean(Table &self);
+/*
+  The name is misleading. It may look like this function works the same as
+  column major version, but actually this one doesn't read the first row to gather
+  information about column names.
+*/
+TableRowMajor read_csv_row_major(const char *filepath);
 
-void print(const Table &self);
+void clean(const TableRowMajor &samples);
 
 #endif // TABLE_HPP

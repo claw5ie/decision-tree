@@ -38,10 +38,24 @@ size_t to_category(const Category &self, const Table::Cell &value)
     return binary_search_interval(value.as.float64, self.as.float64->interval);
   case AttributeType::INTERVAL:
   {
+    /*
+      Reason for searching for lower bound is that "find" function can be extended
+      in this way for any real number. That is, if "min" value is the smallest
+      value for double, and "max" is some arbitrary value, this function should
+      find the first interval to which "max" belongs to. Although, I am not sure
+      that it will behave the same way as "find" when the interval is in the map.
+    */
     auto &interval = *self.as.interval;
-    auto const it = interval.to.find(value.as.interval);
+    auto const it = interval.to.lower_bound(value.as.interval);
 
-    return it != interval.to.end() ? it->second : INVALID_CATEGORY;
+    if (it != interval.to.end())
+    {
+      if (it->first.min <= value.as.interval.max &&
+          value.as.interval.max <= it->first.max)
+        return it->second;
+    }
+
+    return INVALID_CATEGORY;
   }
   }
 

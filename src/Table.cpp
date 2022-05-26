@@ -332,13 +332,15 @@ bool have_same_type(const Table &self, const Table::Selection &sel)
 {
   assert_selection_is_valid(self, sel);
 
-  size_t beg = sel.row_beg * self.cols + sel.col_beg;
-  size_t const end = sel.row_end * self.cols + sel.col_end;
+  auto const expected = get(self, sel.row_beg, sel.col_beg).type;
 
-  for (; beg + 1 < end; beg++)
+  for (size_t row = sel.row_beg; row < sel.row_end; row++)
   {
-    if (self.data[beg].type != self.data[beg + 1].type)
-      return false;
+    for (size_t col = sel.col_beg; col < sel.col_end; col++)
+    {
+      if (expected != get(self, row, col).type)
+        return false;
+    }
   }
 
   return true;

@@ -124,7 +124,7 @@ Categories discretize(const Table &table, const Table::Selection &sel)
                   << row + 1
                   << ", column "
                   << col
-                  << " have different types.\n";
+                  << ", have different types.\n";
         std::exit(EXIT_FAILURE);
       }
     }

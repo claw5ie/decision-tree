@@ -91,7 +91,7 @@ void construct(
   auto const find_best_goal_category =
     [&self, &cons](size_t start, size_t end)
     {
-      size_t best_goal_category = size_t(-1);
+      size_t best_goal_category = INVALID_CATEGORY;
       size_t best_samples_count = 0;
 
       // Reusing temporary header.
@@ -111,7 +111,7 @@ void construct(
         }
       }
 
-      assert(best_goal_category != size_t(-1));
+      assert(best_goal_category != INVALID_CATEGORY);
 
       return best_goal_category;
     };
@@ -119,7 +119,7 @@ void construct(
   if (mut.end - mut.start <= cons.threshold)
     return;
 
-  size_t best_attribute = size_t(-1);
+  size_t best_attribute = INVALID_CATEGORY;
 
   {
     double best_entropy = std::numeric_limits<double>::max();
@@ -143,7 +143,7 @@ void construct(
   }
 
   // No columns to process.
-  if (best_attribute == size_t(-1))
+  if (best_attribute == INVALID_CATEGORY)
   {
     mut.node = { find_best_goal_category(mut.start, mut.end),
                  nullptr, 0, mut.end - mut.start };
@@ -414,10 +414,10 @@ void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
     std::cout << '\n';
     putsn(" ", offset);
 
-    if (self.names != nullptr && node.column < self.categories.count)
+    if (self.names != nullptr)
       std::cout << '<' << self.names[node.column].data;
     else
-      std::cout << "<unnamed";
+      std::cout << "<unnamed" << node.column;
 
     std::cout << " (" << node.samples << ")>\n";
 

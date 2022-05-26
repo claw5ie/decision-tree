@@ -242,14 +242,14 @@ StringView to_string(const Table::Cell &value)
     break;
   case AttributeType::FLOAT64:
     bytes_written = std::snprintf(
-      buffer, buffer_size, "%f", value.as.float64
+      buffer, buffer_size, "%g", value.as.float64
       );
     break;
   case AttributeType::INTERVAL:
     bytes_written = std::snprintf(
       buffer,
       buffer_size,
-      "[%f, %f]",
+      "[%g, %g]",
       value.as.interval.min,
       value.as.interval.max
       );

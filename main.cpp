@@ -20,7 +20,7 @@ Table::Selection read_selection(const char *&string)
         ++string;
 
         if (*string != ',' && *string != '\0')
-          end = read_zu(++string);
+          end = read_zu(string);
         else
           end = std::numeric_limits<size_t>::max();
       }
@@ -126,7 +126,7 @@ int main(int argc, char **argv)
       return INVALID_OPTION;
     };
 
-  size_t threshold = 5;
+  size_t threshold = 3;
   std::vector<size_t> exclusion_list;
   const char *data = nullptr;
   const char *samples = nullptr;
@@ -267,8 +267,8 @@ int main(int argc, char **argv)
 
     if (exclusion_list.size() == 0)
       std::cout << "(empty)\n";
-
-    std::cout << '\n';
+    else
+      std::cout << '\n';
   }
 
   DecisionTree tree = construct(
@@ -281,7 +281,10 @@ int main(int argc, char **argv)
     print(table);
 
   if (should_print_tree)
+  {
     print(tree);
+    std::cout << '\n';
+  }
 
   if (samples != nullptr)
   {

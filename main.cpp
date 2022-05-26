@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 #include <vector>
 #include <limits>
 #include <cstring>
@@ -291,12 +292,17 @@ int main(int argc, char **argv)
     Table samples_table = read_csv(samples);
     size_t *const classes = classify(tree, samples_table);
 
-    // for (size_t i = 0; i < samples.rows; i++)
-    // {
-    //   std::cout << "row " << i << ": ";
-    //   print_goal_category(tree, classes[i]);
-    //   std::cout << '\n';
-    // }
+    std::cout << " Row  |  Class\n";
+    for (size_t i = 0; i < samples_table.rows; i++)
+    {
+      std::cout << std::setw(5) << i << " | ";
+
+      auto value = from_class(tree, classes[i]);
+      if (!value.second)
+        std::cout << "(failed to categorize)\n";
+      else
+        std::cout << to_string(value.first).data << '\n';
+    }
 
     delete[] classes;
     clean(samples_table);

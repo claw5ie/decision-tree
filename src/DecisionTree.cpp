@@ -326,6 +326,12 @@ void clean(const DecisionTree &self)
   delete[] self.pool.data;
 }
 
+std::pair<const Table::Cell, bool>
+from_class(const DecisionTree &self, size_t category)
+{
+  return from_category(self.categories.data[self.goal], category);
+}
+
 size_t classify(const DecisionTree &self, const Table &samples, size_t row)
 {
   const DecisionTree::Node *curr = self.root;

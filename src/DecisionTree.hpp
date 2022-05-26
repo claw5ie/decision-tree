@@ -18,14 +18,6 @@ struct DecisionTree
     size_t samples;
   };
 
-  struct Params
-  {
-    size_t goal;
-    size_t threshold;
-    size_t *columns_to_exclude;
-    size_t columns_count;
-  };
-
   Categories categories;
   size_t goal;
   Node *root;
@@ -34,9 +26,7 @@ struct DecisionTree
 };
 
 DecisionTree construct(
-  const Table &table,
-  const Table::Selection &sel,
-  const DecisionTree::Params &params
+  const Table &table, const Table::Selection &sel, size_t threshold
   );
 
 void clean(const DecisionTree &self);

@@ -209,17 +209,21 @@ void construct(
 }
 
 DecisionTree construct(
-  const Table &table,
-  const Table::Selection &sel,
-  const DecisionTree::Params &params
+  const Table &table, const Table::Selection &sel, size_t threshold
   )
 {
   assert_selection_is_valid(table, sel);
 
+  if (sel.col_end - sel.col_beg <= 1)
+  {
+    std::cerr << "ERROR: table should contain at least 2 columns.\n";
+    std::exit(EXIT_FAILURE);
+  }
+
   DecisionTree tree;
 
   tree.categories = discretize(table, sel);
-  tree.goal = params.goal - sel.col_beg;
+  tree.goal = tree.categories.count - 1;
   tree.pool = allocate(MEMORY_POOL_SIZE);
   tree.root = (DecisionTree::Node *)reserve_array(
     tree.pool, sizeof (DecisionTree::Node), 1
@@ -272,7 +276,7 @@ DecisionTree construct(
 
   ConstTreeData cons_data = {
     { (size_t *)data, rows, cols },
-    params.threshold,
+    threshold,
     (size_t *)(data + offsets[0]),
     (size_t *)(data + offsets[1]),
     { (size_t *)(data + offsets[2]), 0, 0 },
@@ -305,10 +309,7 @@ DecisionTree construct(
   }
 
   std::memset(cons_data.used_columns, 0, offsets[4] - offsets[3]);
-
   cons_data.used_columns[tree.goal] = true;
-  for (size_t i = 0; i < params.columns_count; i++)
-    cons_data.used_columns[params.columns_to_exclude[i]] = true;
 
   for (size_t i = 0; i < rows; i++)
     cons_data.rows[i] = i;
@@ -357,10 +358,13 @@ size_t classify(const DecisionTree &self, const Table &samples, size_t row)
 
 size_t *classify(const DecisionTree &self, Table &samples)
 {
-  if (self.categories.count != samples.cols)
+  if (self.categories.count != samples.cols + 1)
   {
-    std::cerr << "ERROR: the number of columns in decision tree doesn't match "
-      "the number of columns in samples.\n";
+    std::cerr << "ERROR: samples table should have "
+              << self.categories.count - 1
+              << " columns, but got "
+              << samples.cols
+              << ".\n";
     std::exit(EXIT_FAILURE);
   }
 

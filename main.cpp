@@ -1,6 +1,5 @@
 #include <iostream>
 #include <iomanip>
-#include <vector>
 #include <limits>
 #include <cstring>
 #include <cassert>
@@ -87,12 +86,10 @@ int main(int argc, char **argv)
   };
 
   Option const option_list[] = {
-    { 't', "threshold", true },
-    { 'e', "exclude", true },
-    { 's', "samples", true },
     { 'd', "data", true },
-    { 'g', "goal", true },
+    { 's', "samples", true },
     { '\0', "selection", true },
+    { 't', "threshold", true },
     { '\0', "show-config", false },
     { '\0', "print-table", false },
     { '\0', "print-tree", false }
@@ -128,7 +125,6 @@ int main(int argc, char **argv)
     };
 
   size_t threshold = 3;
-  std::vector<size_t> exclusion_list;
   const char *data = nullptr;
   const char *samples = nullptr;
   Table::Selection sel = {
@@ -137,7 +133,6 @@ int main(int argc, char **argv)
     0,
     std::numeric_limits<size_t>::max()
   };
-  size_t goal = std::numeric_limits<size_t>::max();
   bool should_show_config = false;
   bool should_print_table = false;
   bool should_print_tree = false;
@@ -164,47 +159,29 @@ int main(int argc, char **argv)
     switch (option)
     {
     case 0:
+      data = argv[i];
+      break;
+    case 1:
+      samples = argv[i];
+      break;
+    case 2:
+    {
+      const char *arg = argv[i];
+      sel = read_selection(arg);
+    } break;
+    case 3:
     {
       const char *arg = argv[i];
       threshold = read_zu(arg);
       assert(*arg == '\0');
     } break;
-    case 1:
-    {
-      const char *arg = argv[i];
-      bool first_arg = true;
-
-      while (*arg != '\0')
-      {
-        arg += !first_arg && *arg == ',';
-        exclusion_list.push_back(read_zu(arg));
-        first_arg = false;
-      }
-    } break;
-    case 2:
-      samples = argv[i];
-      break;
-    case 3:
-      data = argv[i];
-      break;
     case 4:
-    {
-      const char *arg = argv[i];
-      goal = read_zu(arg);
-      assert(*arg == '\0');
-    } break;
-    case 5:
-    {
-      const char *arg = argv[i];
-      sel = read_selection(arg);
-    } break;
-    case 6:
       should_show_config = true;
       break;
-    case 7:
+    case 5:
       should_print_table = true;
       break;
-    case 8:
+    case 6:
       should_print_tree = true;
       break;
     }
@@ -222,25 +199,6 @@ int main(int argc, char **argv)
     // Fix selection.
     sel.row_end = std::min(sel.row_end, table.rows);
     sel.col_end = std::min(sel.col_end, table.cols);
-
-    // validate exclusion list.
-    for (size_t column: exclusion_list)
-    {
-      if (column < sel.col_beg ||
-          column >= sel.col_end)
-      {
-        std::cerr << "ERROR: cannot exclude column "
-                  << column
-                  << ", bacause it is not in the selection.\n";
-        std::exit(EXIT_FAILURE);
-      }
-    }
-  }
-
-  if (!(sel.col_beg <= goal && goal < sel.col_end))
-  {
-    std::cerr << "ERROR: goal must be in the selection.\n";
-    return EXIT_FAILURE;
   }
 
   if (should_show_config)
@@ -250,33 +208,16 @@ int main(int argc, char **argv)
               << data
               << "\n - samples file: "
               << (samples != nullptr ? samples : "(no file provided)")
-              << "\n - goal: "
-              << goal
-              << "\n - threshold: "
-              << threshold
               << "\n - selection: rows: "
               << sel.row_beg << '-' << sel.row_end
               << "; columns: "
               << sel.col_beg << '-' << sel.col_end
-              << "\n - exclusion list: ";
-
-    for (size_t i = 0; i < exclusion_list.size(); i++)
-    {
-      std::cout << exclusion_list[i]
-                << (i + 1 < exclusion_list.size() ? ',' : '\n');
-    }
-
-    if (exclusion_list.size() == 0)
-      std::cout << "(empty)\n";
-    else
-      std::cout << '\n';
+              << "\n - threshold: "
+              << threshold
+              << "\n\n";
   }
 
-  DecisionTree tree = construct(
-    table,
-    sel,
-    { goal, threshold, exclusion_list.data(), exclusion_list.size() }
-    );
+  DecisionTree tree = construct(table, sel,threshold);
 
   if (should_print_table)
     print(table);

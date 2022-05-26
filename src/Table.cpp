@@ -6,7 +6,9 @@
 #include "Table.hpp"
 #include "Utils.hpp"
 
-const char *to_string(Attribute::Type type)
+#define MEMORY_POOL_SIZE (1024 * 1024)
+
+const char *to_string(AttributeType type)
 {
   static const char *const lookup[] = {
     "String",
@@ -15,26 +17,14 @@ const char *to_string(Attribute::Type type)
     "Interval"
   };
 
-  return type < sizeof (lookup) / (sizeof (*lookup)) ? lookup[type] : nullptr;
+  return type < sizeof (lookup) / sizeof (*lookup) ? lookup[type] : nullptr;
 }
 
-bool is_delimiter(char ch)
-{
-  return ch == ',' || ch == '\n' || ch == '\0';
-}
-
-Attribute::Value read_attribute_value(const char *&str)
+void read_and_emplace_cell(MemoryPool &pool, Table::Cell &cell, const char *&str)
 {
   auto const guess_type =
     [](const char *str)
     {
-      auto const is_number =
-        [](const char *str) -> bool
-        {
-          return std::isdigit(str[0]) ||
-            ((str[0] == '-' || str[0] == '+') && std::isdigit(str[1]));
-        };
-
       if (is_number(str))
       {
         str += str[0] == '-' || str[0] == '+';
@@ -49,334 +39,125 @@ Attribute::Value read_attribute_value(const char *&str)
             str++;
 
           if (str[0] == '-' && is_number(str + 1))
-            return Attribute::INTERVAL;
+            return AttributeType::INTERVAL;
           else
-            return Attribute::FLOAT64;
+            return AttributeType::FLOAT64;
         }
         else if (str[0] == '-' && is_number(str + 1))
         {
-          return Attribute::INTERVAL;
+          return AttributeType::INTERVAL;
         }
         else
         {
-          return Attribute::INT64;
+          return AttributeType::INT64;
         }
       }
       else if ((str[0] == '<' || str[0] == '>') && is_number(str + 1))
       {
-        return Attribute::INTERVAL;
+        return AttributeType::INTERVAL;
       }
       else if (str[0] == '$')
       {
-        return Attribute::INT64;
+        return AttributeType::INT64;
       }
       else
       {
-        return Attribute::STRING;
+        return AttributeType::STRING;
       }
     };
 
-  Attribute::Value value;
+  cell.type = guess_type(str);
 
-  value.type = guess_type(str);
-
-  switch (value.type)
+  switch (cell.type)
   {
-  case Attribute::STRING:
+  case AttributeType::STRING:
   {
     const char *const start = str;
 
-    while (!is_delimiter(*str))
+    while (*str != ',' && *str != '\n' && *str != '\0')
       str++;
 
-    value.as.string = copy(start, str);
+    cell.as.string.size = str - start;
+    cell.as.string.data = push(pool, start, cell.as.string.size);
   } break;
-  case Attribute::INT64:
+  case AttributeType::INT64:
     if (*str == '$')
     {
-      for (value.as.int64 = 0; *str== '$'; str++)
-        value.as.int64++;
+      for (cell.as.int64 = 0; *str== '$'; str++)
+        cell.as.int64++;
     }
     else
     {
-      value.as.int64 = read_int64(str);
+      cell.as.int64 = read_int64(str);
     }
     break;
-  case Attribute::FLOAT64:
-    value.as.float64 = read_float64(str);
+  case AttributeType::FLOAT64:
+    cell.as.float64 = read_float64(str);
     break;
-  case Attribute::INTERVAL:
+  case AttributeType::INTERVAL:
     if (*str == '<')
     {
-      value.as.interval.min = std::numeric_limits<double>::lowest();
-      value.as.interval.max = read_float64(++str);
+      cell.as.interval.min = std::numeric_limits<double>::lowest();
+      cell.as.interval.max = read_float64(++str);
     }
     else if (*str == '>')
     {
-      value.as.interval.min = read_float64(++str);
-      value.as.interval.max = std::numeric_limits<double>::max();
+      cell.as.interval.min = read_float64(++str);
+      cell.as.interval.max = std::numeric_limits<double>::max();
     }
     else
     {
-      value.as.interval.min = read_float64(str);
-      value.as.interval.max = read_float64(++str);
+      cell.as.interval.min = read_float64(str);
+      cell.as.interval.max = read_float64(++str);
 
-      if (value.as.interval.min > value.as.interval.max)
-        std::swap(value.as.interval.min, value.as.interval.max);
+      if (cell.as.interval.min > cell.as.interval.max)
+        std::swap(cell.as.interval.min, cell.as.interval.max);
     }
     break;
   }
-
-  return value;
 }
 
-void find_table_size(const char *string, size_t &rows, size_t &cols)
+Table read_csv(const char *filepath)
 {
-  cols = 1;
-  rows = 1;
-
-  // Count columns.
-  while (*string != '\n' && *string != '\0')
-  {
-    cols += *string == ',';
-    string++;
-  }
-
-  // Count rows.
-  while (*string != '\0')
-  {
-    rows += *string == '\n';
-    string++;
-  }
-}
-
-TableColumnMajor read_csv_column_major(const char *filepath)
-{
-  char *const file_data = read_entire_file(filepath);
-
-  size_t cols;
-  size_t rows;
-
-  find_table_size(file_data, rows, cols);
-
-  // Exclude the first row.
-  --rows;
-
-  auto *const columns = new TableColumnMajor::Column[cols]{ };
-
+  const char *const file_data = read_entire_file(filepath);
   const char *curr = file_data;
 
-  for (size_t i = 0; i < cols; i++)
-  {
-    const char *const start = curr;
+  Table table;
 
-    while (!is_delimiter(*curr))
+  {
+    table.cols = 1;
+    table.rows = 1;
+
+    const char *curr = file_data;
+
+    // Count columns.
+    while (*curr != '\n' && *curr != '\0')
+    {
+      table.cols += *curr == ',';
       curr++;
+    }
 
-    if (i + 1 < cols)
-      require_char(*curr, ',');
-    else
-      require_char(*curr, '\n');
-
-    columns[i].name = copy(start, curr);
-    curr += *curr != '\0';
-  }
-
-  // Could loop one time and initialize all columns, but requires copy-pasting
-  // some code. Probably not worth it, although this will eliminate the need of
-  // "is_initialized" variable. Also, making redundant checks each time, even
-  // though the "else" statement will only be executed once is kinda meh...
-  for (size_t i = 0; i < rows; i++)
-  {
-    for (size_t j = 0; j < cols; j++)
+    // Count rows.
+    while (*curr != '\0')
     {
-      Attribute::Value value = read_attribute_value(curr);
-
-      auto &column = columns[j];
-
-      if (!column.is_initialized)
-      {
-        column.type = value.type;
-        column.is_initialized = true;
-
-        switch (value.type)
-        {
-        case Attribute::STRING:
-          column.as.strings = new String[rows];
-          break;
-        case Attribute::INT64:
-          column.as.int64s = new int64_t[rows];
-          break;
-        case Attribute::FLOAT64:
-          column.as.float64s = new double[rows];
-          break;
-        case Attribute::INTERVAL:
-          column.as.intervals = new Interval[rows];
-          break;
-        }
-      }
-
-      if (column.type != value.type)
-      {
-        std::cerr << "ERROR: value at column "
-                  << j + 1
-                  << ", row "
-                  << i + 2
-                  << " expects to see `"
-                  << to_string(column.type)
-                  << "`, but got `"
-                  << to_string(value.type)
-                  << "`.\n  Note: different types of values in the same column "
-          "are not allowed.\n";
-        std::exit(EXIT_FAILURE);
-      }
-
-      switch (column.type)
-      {
-      case Attribute::STRING:
-        column.as.strings[i] = value.as.string;
-        break;
-      case Attribute::INT64:
-        column.as.int64s[i] = value.as.int64;
-        break;
-      case Attribute::FLOAT64:
-        column.as.float64s[i] = value.as.float64;
-        break;
-      case Attribute::INTERVAL:
-        column.as.intervals[i] = value.as.interval;
-        break;
-      }
-
-      if (j + 1 < cols)
-        require_char(*curr, ',');
-      else if (i + 1 < rows)
-        require_char(*curr, '\n');
-      else
-        require_char(*curr, '\0');
-
-      curr += *curr != '\0';
+      table.rows += *curr == '\n';
+      curr++;
     }
   }
 
-  delete[] file_data;
-
-  return { columns, cols, rows };
-}
-
-void clean(const TableColumnMajor &self)
-{
-  for (size_t i = 0; i < self.cols; i++)
-  {
-    auto &column = self.columns[i];
-
-    switch (column.type)
-    {
-    case Attribute::STRING:
-      for (size_t i = 0; i < self.rows; i++)
-        delete[] column.as.strings[i].data;
-      delete[] column.as.strings;
-      break;
-    case Attribute::INT64:
-      delete[] column.as.int64s;
-      break;
-    case Attribute::FLOAT64:
-      delete[] column.as.float64s;
-      break;
-    case Attribute::INTERVAL:
-      delete[] column.as.intervals;
-      break;
-    }
-
-    delete[] column.name.data;
-  }
-
-  delete[] self.columns;
-}
-
-Attribute::Value get(const TableColumnMajor &self, size_t col, size_t row)
-{
-  assert(col < self.cols && row < self.rows);
-
-  auto &column = self.columns[col];
-  Attribute::Value value;
-
-  value.type = column.type;
-
-  switch (column.type)
-  {
-  case Attribute::STRING:
-    value.as.string = column.as.strings[row];
-    break;
-  case Attribute::INT64:
-    value.as.int64 = column.as.int64s[row];
-    break;
-  case Attribute::FLOAT64:
-    value.as.float64 = column.as.float64s[row];
-    break;
-  case Attribute::INTERVAL:
-    value.as.interval = column.as.intervals[row];
-    break;
-  }
-
-  return value;
-}
-
-void print(const TableColumnMajor &self)
-{
-  for (size_t i = 0; i < self.cols; i++)
-  {
-    auto &column = self.columns[i];
-
-    std::cout << column.name.data << ", " << column.type << ": ";
-
-    for (size_t j = 0; j < self.rows; j++)
-    {
-      switch (column.type)
-      {
-      case Attribute::STRING:
-        std::cout << column.as.strings[j].data;
-        break;
-      case Attribute::INT64:
-        std::cout << column.as.int64s[j];
-        break;
-      case Attribute::FLOAT64:
-        std::cout << column.as.float64s[j];
-        break;
-      case Attribute::INTERVAL:
-      {
-        auto &interval = column.as.intervals[j];
-        std::cout << interval.min << '-' << interval.max;
-      } break;
-      }
-
-      std::cout << (j + 1 < self.rows ? ' ' : '\n');
-    }
-  }
-}
-
-TableRowMajor read_csv_row_major(const char *filepath)
-{
-  char *const file_data = read_entire_file(filepath);
-  const char *curr = file_data;
-
-  TableRowMajor table;
-
-  find_table_size(curr, table.rows, table.cols);
-
-  table.data = new Attribute::Value[table.cols * table.rows];
+  table.data = new Table::Cell[table.cols * table.rows];
+  table.pool = allocate(MEMORY_POOL_SIZE);
 
   for (size_t i = 0; i < table.rows; i++)
   {
     for (size_t j = 0; j < table.cols; j++)
     {
-      table.data[i * table.cols + j] = read_attribute_value(curr);
+      read_and_emplace_cell(table.pool, table.data[i * table.cols + j], curr);
 
-      if (j + 1 < table.cols)
-        require_char(*curr, ',');
-      else if (i + 1 < table.rows)
-        require_char(*curr, '\n');
-      else
-        require_char(*curr, '\0');
+      require_char(
+        *curr,
+        j + 1 < table.cols ? ',' : (i + 1 < table.rows ? '\n' : '\0')
+        );
 
       curr += *curr != '\0';
     }
@@ -387,13 +168,178 @@ TableRowMajor read_csv_row_major(const char *filepath)
   return table;
 }
 
-void clean(const TableRowMajor &self)
+void clean(const Table &self)
 {
-  for (size_t i = 0; i < self.cols * self.rows; i++)
+  delete[] self.data;
+  delete[] self.pool.data;
+}
+
+const Table::Cell &get(const Table &self, size_t row, size_t column)
+{
+  assert(row < self.rows && column < self.cols);
+
+  return self.data[row * self.cols + column];
+}
+
+Table::Cell &get(Table &self, size_t row, size_t column)
+{
+  assert(row < self.rows && column < self.cols);
+
+  return self.data[row * self.cols + column];
+}
+
+void print(const Table &self)
+{
+  for (size_t i = 0; i < self.rows; i++)
   {
-    if (self.data[i].type == Attribute::STRING)
-      delete[] self.data[i].as.string.data;
+    for (size_t j = 0; j < self.cols; j++)
+    {
+      auto &cell = self.data[i * self.cols + j];
+
+      std::cout << to_string(cell.type) << ": ";
+
+      switch (cell.type)
+      {
+      case AttributeType::STRING:
+        std::cout << cell.as.string.data;
+        break;
+      case AttributeType::INT64:
+        std::cout << cell.as.int64;
+        break;
+      case AttributeType::FLOAT64:
+        std::cout << cell.as.int64;
+        break;
+      case AttributeType::INTERVAL:
+        std::cout << '[' << cell.as.interval.min
+                  << ", "
+                  << cell.as.interval.max << ']';
+        break;
+      }
+
+      std::cout << (j + 1 < self.cols ? ',' : '\n');
+    }
+  }
+}
+
+StringView to_string(const Table::Cell &value)
+{
+  constexpr size_t buffer_size = 128;
+  static char buffer[buffer_size];
+
+  int bytes_written = -1;
+
+  switch (value.type)
+  {
+  case AttributeType::STRING:
+    bytes_written = std::snprintf(
+      buffer, buffer_size, "%s", value.as.string.data
+      );
+    break;
+  case AttributeType::INT64:
+    bytes_written = std::snprintf(
+      buffer, buffer_size, "%li", value.as.int64
+      );
+    break;
+  case AttributeType::FLOAT64:
+    bytes_written = std::snprintf(
+      buffer, buffer_size, "%f", value.as.float64
+      );
+    break;
+  case AttributeType::INTERVAL:
+    bytes_written = std::snprintf(
+      buffer,
+      buffer_size,
+      "[%f, %f]",
+      value.as.interval.min,
+      value.as.interval.max
+      );
+    break;
   }
 
-  delete[] self.data;
+  if (bytes_written < 0 || bytes_written >= (int)buffer_size)
+  {
+    std::cerr << "ERROR: failed to convert value to a string.\n";
+    std::exit(EXIT_FAILURE);
+  }
+
+  return { buffer, (size_t)bytes_written };
+}
+
+bool promote(Table &self, AttributeType to, const Table::Selection &sel)
+{
+  assert_selection_is_valid(self, sel);
+
+  bool converted_every_cell = true;
+
+  switch (to)
+  {
+  case AttributeType::INTERVAL:
+    for (size_t row = sel.row_beg; row < sel.row_end; row++)
+    {
+      for (size_t col = sel.col_beg; col < sel.col_end; col++)
+      {
+        auto &cell = get(self, row, col);
+
+        switch (cell.type)
+        {
+        case AttributeType::STRING:
+          converted_every_cell = false;
+          break;
+        case AttributeType::INT64:
+        {
+          int64_t const value = cell.as.int64;
+
+          cell.type = to;
+          cell.as.interval.min = std::numeric_limits<double>::lowest();
+          cell.as.interval.max = value;
+        } break;
+        case AttributeType::FLOAT64:
+        {
+          double const value = cell.as.float64;
+
+          cell.type = to;
+          cell.as.interval.min = std::numeric_limits<double>::lowest();
+          cell.as.interval.max = value;
+        } break;
+        case AttributeType::INTERVAL:
+          break;
+        }
+      }
+    }
+    break;
+  default:
+    std::cerr << "ERROR: cannot convert cells to type `"
+              << to_string(to)
+              << "`.\n";
+    std::exit(EXIT_FAILURE);
+  }
+
+  return converted_every_cell;
+}
+
+void assert_selection_is_valid(const Table &self, const Table::Selection &sel)
+{
+  if (sel.row_beg >= self.rows || sel.row_end > self.rows ||
+      sel.col_beg >= self.cols || sel.col_end > self.cols ||
+      sel.row_beg > sel.row_end || sel.col_beg > sel.col_end)
+  {
+    std::cerr << "ERROR: invalid selection.\n";
+    std::exit(EXIT_FAILURE);
+  }
+}
+
+bool have_same_type(const Table &self, const Table::Selection &sel)
+{
+  assert_selection_is_valid(self, sel);
+
+  size_t beg = sel.row_beg * self.cols + sel.col_beg;
+  size_t const end = sel.row_end * self.cols + sel.col_end;
+
+  for (; beg + 1 < end; beg++)
+  {
+    if (self.data[beg].type != self.data[beg + 1].type)
+      return false;
+  }
+
+  return true;
 }

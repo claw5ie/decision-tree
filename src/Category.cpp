@@ -3,234 +3,302 @@
 #include <cassert>
 #include "Category.hpp"
 
-void CategoryKind::StringKind::discretize(
-  const TableColumnMajor &table, const TableColumnMajor::Column &column
-  )
+#define MEMORY_POOL_SIZE (1024 * 1024 / 2)
+
+size_t to_category(const Category &self, const Table::Cell &value)
 {
-  assert(column.type == Attribute::STRING);
+  if (self.type != value.type)
+    assert(self.type == value.type);
 
-  for (size_t i = 0; i < table.rows; i++)
+  switch (self.type)
   {
-    const auto &value = column.as.strings[i];
+  case AttributeType::STRING:
+  {
+    auto &string = *self.as.string;
+    auto const it = string.to.find(value.as.string);
 
-    if (to.find(value) == to.end())
-      to.emplace(copy(value), to.size());
+    return it != string.to.end() ? it->second : INVALID_CATEGORY;
+  }
+  case AttributeType::INT64:
+  {
+    auto &int64 = *self.as.int64;
+
+    if (int64.to.size() > 0)
+    {
+      auto const it = int64.to.find(value.as.int64);
+
+      return it != int64.to.end() ? it->second : INVALID_CATEGORY;
+    }
+    else
+    {
+      return binary_search_interval(value.as.int64, int64.interval);
+    }
+  };
+  case AttributeType::FLOAT64:
+    return binary_search_interval(value.as.float64, self.as.float64->interval);
+  case AttributeType::INTERVAL:
+  {
+    auto &interval = *self.as.interval;
+    auto const it = interval.to.find(value.as.interval);
+
+    return it != interval.to.end() ? it->second : INVALID_CATEGORY;
+  }
   }
 
-  from = new String[to.size()];
-
-  for (auto &elem: to)
-    from[elem.second] = elem.first;
+  return INVALID_CATEGORY;
 }
 
-void CategoryKind::Int64::discretize(
-  const TableColumnMajor &table, const TableColumnMajor::Column &column
-  )
+std::pair<const Table::Cell, bool>
+from_category(const Category &self, size_t category)
 {
-  assert(column.type == Attribute::INT64);
+  Table::Cell cell;
+  bool succeeded = false;
 
-  int64_t min = std::numeric_limits<int64_t>::max(),
-    max = std::numeric_limits<int64_t>::lowest();
+  cell.type = self.type;
 
-  for (size_t i = 0; i < table.rows; i++)
+  switch (self.type)
   {
-    auto const value = column.as.int64s[i];
+  case AttributeType::STRING:
+    if (category < self.count)
+    {
+      cell.as.string = self.as.string->from[category];
+      succeeded = true;
+    }
+    break;
+  case AttributeType::INT64:
+  {
+    auto &int64 = *self.as.int64;
 
-    if (to.size() < INTEGER_CATEGORY_LIMIT)
-      to.emplace(value, to.size());
-
-    min = std::min(min, value);
-    max = std::max(max, value);
+    if (int64.to.size() > 0 && category < int64.to.size())
+    {
+      cell.as.int64 = int64.from[category];
+      succeeded = true;
+    }
+    else if (category < self.count)
+    {
+      cell.type = AttributeType::INTERVAL;
+      cell.as.interval = {
+        int64.interval.min + category * int64.interval.step,
+        int64.interval.min + (category + 1) * int64.interval.step,
+      };
+      succeeded = true;
+    }
+  } break;
+  case AttributeType::FLOAT64:
+    if (category < self.count)
+    {
+      auto &interval = self.as.float64->interval;
+      cell.type = AttributeType::INTERVAL;
+      cell.as.interval = {
+        interval.min + category * interval.step,
+        interval.min + (category + 1) * interval.step
+      };
+      succeeded = true;
+    }
+    break;
+  case AttributeType::INTERVAL:
+    if (category < self.count)
+    {
+      cell.as.interval = self.as.interval->from[category];
+      succeeded = true;
+    }
+    break;
   }
 
-  interval = { (double)min, (double)(max - min) / (BINS_COUNT - 1), BINS_COUNT };
-
-  if (to.size() >= INTEGER_CATEGORY_LIMIT)
-  {
-    from = nullptr;
-    to.clear();
-  }
-  else
-  {
-    from = new int64_t[to.size()];
-
-    for (auto &elem: to)
-      from[elem.second] = elem.first;
-  }
+  return std::pair<Table::Cell, bool>(cell, succeeded);
 }
 
-void CategoryKind::Float64::discretize(
-  const TableColumnMajor &table, const TableColumnMajor::Column &column
-  )
+Categories discretize(const Table &table, const Table::Selection &sel)
 {
-  assert(column.type == Attribute::FLOAT64);
+  assert_selection_is_valid(table, sel);
 
-  double min = std::numeric_limits<double>::max(),
-    max = std::numeric_limits<double>::lowest();
-
-  for (size_t i = 0; i < table.rows; i++)
+  for (size_t col = sel.col_beg; col < sel.col_end; col++)
   {
-    auto const value = column.as.float64s[i];
-
-    min = std::min(min, value);
-    max = std::max(max, value);
+    for (size_t row = sel.row_beg; row + 1 < sel.row_end; row++)
+    {
+      if (get(table, row, col).type != get(table, row + 1, col).type)
+      {
+        std::cerr << "ERROR: values at rows "
+                  << row
+                  << " and "
+                  << row + 1
+                  << ", column "
+                  << col
+                  << " have different types.\n";
+        std::exit(EXIT_FAILURE);
+      }
+    }
   }
 
-  interval = { min, (max - min) / (BINS_COUNT - 1), BINS_COUNT };
-}
+  Categories categories;
 
-void CategoryKind::IntervalKind::discretize(
-  const TableColumnMajor &table, const TableColumnMajor::Column &column
-  )
-{
-  assert(column.type == Attribute::INTERVAL);
+  categories.count = sel.col_end - sel.col_beg;
+  categories.data = new Category[categories.count];
+  categories.pool = allocate(MEMORY_POOL_SIZE);
 
-  for (size_t i = 0; i < table.rows; i++)
-    to.emplace(column.as.intervals[i], to.size());
-
-  from = new Interval[to.size()];
-
-  for (auto &elem: to)
-    from[elem.second] = elem.first;
-}
-
-void CategoryKind::StringKind::clean()
-{
-  for (size_t i = 0; i < to.size(); i++)
-    delete[] from[i].data;
-
-  delete[] from;
-}
-
-/*
-  If the attribute was split into bins, form is set to "nullptr", "delete" should
-  treat that for us.
-*/
-void CategoryKind::Int64::clean()
-{
-  delete[] from;
-}
-
-void CategoryKind::Float64::clean()
-{
-  // No need to clean things up.
-}
-
-void CategoryKind::IntervalKind::clean()
-{
-  delete[] from;
-}
-
-size_t CategoryKind::StringKind::count() const
-{
-  return to.size();
-}
-
-size_t CategoryKind::Int64::count() const
-{
-  return to.size() > 0 ? to.size() : interval.count - 1;
-}
-
-size_t CategoryKind::Float64::count() const
-{
-  return interval.count - 1;
-}
-
-size_t CategoryKind::IntervalKind::count() const
-{
-  return to.size();
-}
-
-size_t CategoryKind::StringKind::to_category(const Attribute::Value &value) const
-{
-  auto const it = to.find(value.as.string);
-
-  return (it != to.end()) ? it->second : size_t(-1);
-}
-
-size_t CategoryKind::Int64::to_category(const Attribute::Value &value) const
-{
-  if (to.size() > 0)
+  for (size_t col = sel.col_beg; col < sel.col_end; col++)
   {
-    auto const it = to.find(value.as.int64);
+    auto &category = categories.data[col - sel.col_beg];
 
-    return (it != to.end()) ? it->second : size_t(-1);
-  }
-  else
-  {
-    return binary_search_interval(value.as.int64, interval);
-  }
-}
+    category.type = get(table, sel.row_beg, col).type;
 
-size_t CategoryKind::Float64::to_category(const Attribute::Value &value) const
-{
-  return binary_search_interval(value.as.float64, interval);
-}
-
-size_t CategoryKind::IntervalKind::to_category(const Attribute::Value &value) const
-{
-  auto const it = to.find(value.as.interval);
-
-  return (it != to.end()) ? it->second : size_t(-1);
-}
-
-void CategoryKind::StringKind::print_from_category(size_t category) const
-{
-  if (category < to.size())
-    std::cout << from[category].data;
-  else
-    std::cout << "Invalid category";
-}
-
-void CategoryKind::Int64::print_from_category(size_t category) const
-{
-  if (to.size() > 0 && category < to.size())
-    std::cout << from[category];
-  else if (category + 1 < interval.count)
-    std::cout << '['
-              << interval.min + category * interval.step
-              << ", "
-              << interval.min + (category + 1) * interval.step
-              << ']';
-  else
-    std::cout << "Invalid category";
-}
-
-void CategoryKind::Float64::print_from_category(size_t category) const
-{
-  if (category + 1 < interval.count)
-    std::cout << '['
-              << interval.min + category * interval.step
-              << ", "
-              << interval.min + (category + 1) * interval.step
-              << ']';
-  else
-    std::cout << "Invalid category";
-}
-
-void CategoryKind::IntervalKind::print_from_category(size_t category) const
-{
-  if (category < to.size())
-    std::cout << '[' << from[category].min << ", " << from[category].max << ']';
-  else
-    std::cout << "Invalid category";
-}
-
-Category *new_category(Attribute::Type type)
-{
-  switch (type)
-  {
-  case Attribute::STRING:
-    return new CategoryKind::StringKind;
-  case Attribute::INT64:
-    return new CategoryKind::Int64;
-  case Attribute::FLOAT64:
-    return new CategoryKind::Float64;
-  case Attribute::INTERVAL:
-    return new CategoryKind::IntervalKind;
-  default:
-    ;
+    switch (category.type)
+    {
+    case AttributeType::STRING:
+      category.as.string = new Category::StringC;
+      break;
+    case AttributeType::INT64:
+      category.as.int64 = new Category::Int64C;
+      break;
+    case AttributeType::FLOAT64:
+      category.as.float64 = new Category::Float64C;
+      break;
+    case AttributeType::INTERVAL:
+      category.as.interval = new Category::IntervalC;
+      break;
+    }
   }
 
-  return nullptr;
+  for (size_t col = sel.col_beg; col < sel.col_end; col++)
+  {
+    auto &category = categories.data[col - sel.col_beg];
+
+    switch (category.type)
+    {
+    case AttributeType::STRING:
+    {
+      auto &string = *category.as.string;
+
+      for (size_t row = sel.row_beg; row < sel.row_end; row++)
+      {
+        auto &value = get(table, row, col);
+
+        auto const it = string.to.emplace(
+          push(categories.pool, value.as.string),
+          string.to.size()
+          );
+
+        if (!it.second)
+          pop(categories.pool, value.as.string.size);
+      }
+
+      string.from = (String *)reserve_array(
+        categories.pool, sizeof (String), string.to.size()
+        );
+
+      for (auto &elem: string.to)
+        string.from[elem.second] = push(categories.pool, elem.first);
+
+      category.count = string.to.size();
+    } break;
+    case AttributeType::INT64:
+    {
+      auto &int64 = *category.as.int64;
+
+      int64_t min = std::numeric_limits<int64_t>::max(),
+        max = std::numeric_limits<int64_t>::lowest();
+
+      for (size_t row = sel.row_beg; row < sel.row_end; row++)
+      {
+        auto &value = get(table, row, col);
+
+        if (int64.to.size() < INTEGER_CATEGORY_LIMIT)
+          int64.to.emplace(value.as.int64, int64.to.size());
+
+        min = std::min(min, value.as.int64);
+        max = std::max(max, value.as.int64);
+      }
+
+      int64.interval = {
+        (double)min,
+        (double)(max - min) / (BINS_COUNT - 1),
+        BINS_COUNT
+      };
+
+      if (int64.to.size() >= INTEGER_CATEGORY_LIMIT)
+      {
+        int64.from = nullptr;
+        int64.to.clear();
+        category.count = BINS_COUNT - 1;
+      }
+      else
+      {
+        int64.from = (int64_t *)reserve_array(
+          categories.pool, sizeof (int64_t), int64.to.size()
+          );
+
+        for (auto &elem: int64.to)
+          int64.from[elem.second] = elem.first;
+
+        category.count = int64.to.size();
+      }
+    } break;
+    case AttributeType::FLOAT64:
+    {
+      double min = std::numeric_limits<double>::max(),
+        max = std::numeric_limits<double>::lowest();
+
+      for (size_t row = sel.row_beg; row < sel.row_end; row++)
+      {
+        auto &value = get(table, row, col);
+
+        min = std::min(min, value.as.float64);
+        max = std::max(max, value.as.float64);
+      }
+
+      category.as.float64->interval = {
+        min,
+        (max - min) / (BINS_COUNT - 1),
+        BINS_COUNT
+      };
+
+      category.count = BINS_COUNT - 1;
+    } break;
+    case AttributeType::INTERVAL:
+    {
+      auto &interval = *category.as.interval;
+
+      for (size_t row = sel.row_beg; row < sel.row_end; row++)
+        interval.to.emplace(get(table, row, col).as.interval, interval.to.size());
+
+      interval.from = (Interval *)reserve_array(
+        categories.pool, sizeof (Interval), interval.to.size()
+        );
+
+      for (auto &elem: interval.to)
+        interval.from[elem.second] = elem.first;
+
+      category.count = interval.to.size();
+    } break;
+    }
+  }
+
+  return categories;
+}
+
+void clean(const Categories &self)
+{
+  for (size_t i = 0; i < self.count; i++)
+  {
+    auto &category = self.data[i];
+
+    switch (category.type)
+    {
+    case AttributeType::STRING:
+      delete category.as.string;
+      break;
+    case AttributeType::INT64:
+      delete category.as.int64;
+      break;
+    case AttributeType::FLOAT64:
+      delete category.as.float64;
+      break;
+    case AttributeType::INTERVAL:
+      delete category.as.interval;
+      break;
+    }
+  }
+
+  delete[] self.data;
+  delete[] self.pool.data;
 }

@@ -5,19 +5,29 @@
 #include "String.hpp"
 #include "Intervals.hpp"
 
-namespace Attribute
+enum AttributeType
 {
-  enum Type
+  STRING,
+  INT64,
+  FLOAT64,
+  INTERVAL
+};
+
+const char *to_string(AttributeType type);
+
+struct Table
+{
+  struct Selection
   {
-    STRING,
-    INT64,
-    FLOAT64,
-    INTERVAL
+    size_t row_beg,
+      row_end,
+      col_beg,
+      col_end;
   };
 
-  struct Value
+  struct Cell
   {
-    Type type;
+    AttributeType type;
 
     union
     {
@@ -27,55 +37,31 @@ namespace Attribute
       Interval interval;
     } as;
   };
-}
 
-const char *to_string(Attribute::Type type);
-
-struct TableColumnMajor
-{
-  struct Column
-  {
-    Attribute::Type type;
-
-    union
-    {
-      String *strings;
-      int64_t *int64s;
-      double *float64s;
-      Interval *intervals;
-    } as;
-
-    String name;
-    bool is_initialized;
-  };
-
-  Column *columns;
-  size_t cols,
-    rows;
-};
-
-TableColumnMajor read_csv_column_major(const char *filepath);
-
-void clean(const TableColumnMajor &self);
-
-Attribute::Value get(const TableColumnMajor &self, size_t column, size_t row);
-
-void print(const TableColumnMajor &self);
-
-struct TableRowMajor
-{
-  Attribute::Value *data;
+  Cell *data;
   size_t rows,
     cols;
+  MemoryPool pool;
 };
 
-/*
-  The name is misleading. It may look like this function works the same as
-  column major version, but actually this one doesn't read the first row to gather
-  information about column names.
-*/
-TableRowMajor read_csv_row_major(const char *filepath);
+Table read_csv(const char *filepath);
 
-void clean(const TableRowMajor &samples);
+void clean(const Table &samples);
+
+const Table::Cell &get(const Table &self, size_t row, size_t column);
+
+Table::Cell &get(Table &self, size_t row, size_t column);
+
+void print(const Table &self);
+
+StringView to_string(const Table::Cell &value);
+
+bool promote(Table &self, AttributeType to, const Table::Selection &sel);
+
+void assert_selection_is_valid(
+  const Table &table, const Table::Selection &selection
+  );
+
+bool have_same_type(const Table &self, const Table::Selection &sel);
 
 #endif // TABLE_HPP

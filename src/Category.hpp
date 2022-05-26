@@ -5,99 +5,63 @@
 #include "String.hpp"
 #include "Table.hpp"
 
+#define INVALID_CATEGORY (std::numeric_limits<size_t>::max())
 #define INTEGER_CATEGORY_LIMIT 7u
 #define BINS_COUNT 4u
 
 struct Category
 {
-  virtual void discretize(
-    const TableColumnMajor &table, const TableColumnMajor::Column &column
-    ) = 0;
-
-  virtual void clean() = 0;
-
-  virtual size_t count() const = 0;
-
-  virtual size_t to_category(const Attribute::Value &value) const = 0;
-
-  virtual void print_from_category(size_t category) const = 0;
-};
-
-namespace CategoryKind
-{
-  struct StringKind: public Category
+  struct StringC
   {
     std::map<String, size_t, StringComparator> to;
     String *from;
-
-    void discretize(
-      const TableColumnMajor &table, const TableColumnMajor::Column &column
-      );
-
-    void clean();
-
-    size_t count() const;
-
-    size_t to_category(const Attribute::Value &value) const;
-
-    void print_from_category(size_t category) const;
   };
 
-  struct Int64: public Category
+  struct Int64C
   {
     std::map<int64_t, size_t> to;
     int64_t *from;
     SearchInterval interval;
-
-    void discretize(
-      const TableColumnMajor &table, const TableColumnMajor::Column &column
-      );
-
-    void clean();
-
-    size_t count() const;
-
-    size_t to_category(const Attribute::Value &value) const;
-
-    void print_from_category(size_t category) const;
   };
 
-  struct Float64: public Category
+  struct Float64C
   {
     SearchInterval interval;
-
-    void discretize(
-      const TableColumnMajor &table, const TableColumnMajor::Column &column
-      );
-
-    void clean();
-
-    size_t count() const;
-
-    size_t to_category(const Attribute::Value &value) const;
-
-    void print_from_category(size_t category) const;
   };
 
-  struct IntervalKind: public Category
+  struct IntervalC
   {
     std::map<Interval, size_t> to;
     Interval *from;
-
-    void discretize(
-      const TableColumnMajor &table, const TableColumnMajor::Column &column
-      );
-
-    void clean();
-
-    size_t count() const;
-
-    size_t to_category(const Attribute::Value &value) const;
-
-    void print_from_category(size_t category) const;
   };
-}
 
-Category *new_category(Attribute::Type type);
+  AttributeType type;
+
+  union
+  {
+    StringC *string;
+    Int64C *int64;
+    Float64C *float64;
+    IntervalC *interval;
+  } as;
+
+  size_t count;
+};
+
+size_t to_category(const Category &self, const Table::Cell &value);
+
+std::pair<const Table::Cell, bool>
+from_category(const Category &self, size_t category);
+
+struct Categories
+{
+  Category *data;
+  size_t count;
+  MemoryPool pool;
+};
+
+Categories discretize(const Table &table, const Table::Selection &sel);
+
+void clean(const Categories &self);
 
 #endif // CATEGORY_HPP

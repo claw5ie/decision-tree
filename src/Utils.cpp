@@ -29,8 +29,20 @@ void putsn(const char *string, size_t count)
     std::cout << string;
 }
 
+bool is_number(const char *str)
+{
+  return std::isdigit(str[0]) ||
+    ((str[0] == '-' || str[0] == '+') && std::isdigit(str[1]));
+}
+
 int64_t read_int64(const char *&str)
 {
+  if (!is_number(str))
+  {
+    std::cerr << "ERROR: no number to read.\n";
+    std::exit(EXIT_FAILURE);
+  }
+
   bool const should_be_negative = *str == '-';
 
   str += should_be_negative || *str == '+';
@@ -45,8 +57,32 @@ int64_t read_int64(const char *&str)
   return val;
 }
 
+size_t read_zu(const char *&str)
+{
+  if (*str == '-' || !std::isdigit(*str) ||
+      (*str == '+' && !std::isdigit(str[1])))
+  {
+    std::cerr << "ERROR: no number to read.\n";
+    std::exit(EXIT_FAILURE);
+  }
+
+  str += *str == '+';
+
+  size_t val = 0;
+  for (; std::isdigit(*str); str++)
+    val = val * 10 + (*str - '0');
+
+  return val;
+}
+
 double read_float64(const char *&str)
 {
+  if (!is_number(str))
+  {
+    std::cerr << "ERROR: no number to read.\n";
+    std::exit(EXIT_FAILURE);
+  }
+
   bool const should_be_negative = *str == '-';
 
   str += should_be_negative || *str == '+';

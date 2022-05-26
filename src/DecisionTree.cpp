@@ -8,6 +8,8 @@
 #include "Utils.hpp"
 #include "DecisionTree.hpp"
 
+#define MEMORY_POOL_SIZE (1024 * 1024 / 2)
+
 struct ConstTreeData
 {
   Matzu table;
@@ -36,8 +38,8 @@ void construct(
   auto const compute_entropy_after_split =
     [&self, &cons](size_t attr, const size_t *start, const size_t *end) -> double
     {
-      cons.samples.rows = self.categories[attr]->count();
-      cons.samples.cols = self.categories[self.goal]->count();
+      cons.samples.rows = self.categories.data[attr].count;
+      cons.samples.cols = self.categories.data[self.goal].count;
 
       std::memset(
         cons.theader, 0, cons.samples.rows * sizeof (size_t)
@@ -94,7 +96,7 @@ void construct(
 
       // Reusing temporary header.
       std::memset(
-        cons.theader, 0, self.categories[self.goal]->count() * sizeof (size_t)
+        cons.theader, 0, self.categories.data[self.goal].count * sizeof (size_t)
         );
 
       for (size_t i = start; i < end; i++)
@@ -122,7 +124,7 @@ void construct(
   {
     double best_entropy = std::numeric_limits<double>::max();
 
-    for (size_t i = 0; i < self.count; i++)
+    for (size_t i = 0; i < self.categories.count; i++)
     {
       if (!cons.used_columns[i])
       {
@@ -149,7 +151,7 @@ void construct(
     return;
   }
 
-  size_t const category_count = self.categories[best_attribute]->count();
+  size_t const category_count = self.categories.data[best_attribute].count;
 
   mut.node.column = best_attribute;
   mut.node.children = new DecisionTree::Node[category_count];
@@ -207,44 +209,69 @@ void construct(
 }
 
 DecisionTree construct(
-  const TableColumnMajor &table, const DecisionTree::Params &params
+  const Table &table,
+  const Table::Selection &sel,
+  const DecisionTree::Params &params
   )
 {
-  DecisionTree tree = {
-    new Category *[table.cols],
-    new String[table.cols],
-    table.cols,
-    params.goal,
-    new DecisionTree::Node{ }
-  };
+  assert_selection_is_valid(table, sel);
 
-  size_t max_rows_count = 0;
+  DecisionTree tree;
 
-  for (size_t i = 0; i < table.cols; i++)
+  tree.categories = discretize(table, sel);
+  tree.goal = params.goal - sel.col_beg;
+  tree.pool = allocate(MEMORY_POOL_SIZE);
+  tree.root = (DecisionTree::Node *)reserve_array(
+    tree.pool, sizeof (DecisionTree::Node), 1
+    );
+  *tree.root = { INVALID_CATEGORY, nullptr, 0, 0 };
+
+  if (sel.row_beg <= 0)
   {
-    auto &column = table.columns[i];
-
-    (tree.categories[i] = new_category(column.type))->discretize(table, column);
-    tree.names[i] = copy(column.name);
-    max_rows_count =
-      std::max(max_rows_count, tree.categories[i]->count());
+    tree.names = nullptr;
+  }
+  else
+  {
+    tree.names = (String *)reserve_array(
+      tree.pool, sizeof (String), tree.categories.count
+      );
   }
 
+  size_t max_matrix_rows_count = 0;
+
+  for (size_t col = sel.col_beg; col < sel.col_end; col++)
+  {
+    size_t const index = col - sel.col_beg;
+
+    if (tree.names != nullptr)
+    {
+      StringView const view = to_string(get(table, sel.row_beg - 1, col));
+      tree.names[index].data = push(tree.pool, view.data, view.size);
+      tree.names[index].size = view.size;
+    }
+
+    max_matrix_rows_count =
+      std::max(max_matrix_rows_count, tree.categories.data[index].count);
+  }
+
+  size_t const rows = sel.row_end - sel.row_beg,
+    cols = sel.col_end - sel.col_beg;
   size_t offsets[6];
 
   char *const data = allocate_in_chunks(
     offsets,
     6,
-    table.cols * table.rows * sizeof (size_t),
-    max_rows_count * sizeof (size_t),
-    max_rows_count * sizeof (size_t),
-    max_rows_count * tree.categories[tree.goal]->count() * sizeof (size_t),
-    table.cols * sizeof (bool),
-    table.rows * sizeof (size_t)
+    cols * rows * sizeof (size_t),
+    max_matrix_rows_count * sizeof (size_t),
+    max_matrix_rows_count * sizeof (size_t),
+    max_matrix_rows_count * tree.categories.data[tree.goal].count *
+      sizeof (size_t),
+    cols * sizeof (bool),
+    rows * sizeof (size_t)
     );
 
   ConstTreeData cons_data = {
-    { (size_t *)data, table.rows, table.cols },
+    { (size_t *)data, rows, cols },
     params.threshold,
     (size_t *)(data + offsets[0]),
     (size_t *)(data + offsets[1]),
@@ -253,14 +280,27 @@ DecisionTree construct(
     (size_t *)(data + offsets[4])
   };
 
-  for (size_t i = 0; i < table.cols; i++)
+  for (size_t col = sel.col_beg; col < sel.col_end; col++)
   {
-    auto &category = tree.categories[i];
+    size_t const index = col - sel.col_beg;
+    auto &category = tree.categories.data[index];
 
-    for (size_t j = 0; j < table.rows; j++)
+    for (size_t row = sel.row_beg; row < sel.row_end; row++)
     {
-      at_column_major(cons_data.table, i, j) =
-        category->to_category(get(table, i, j));
+      // Weird formating, assigning is happening here.
+      size_t const value = (at_column_major(
+                              cons_data.table, index, row - sel.row_beg
+                              ) = to_category(
+                                category, get(table, row, col))
+        );
+
+      if (value >= category.count)
+      {
+        std::cerr << "ERROR: couldn't categorize value at (row, column) = ("
+                  << row << ", " << col
+                  << "). Aborting, as it may cause undefined behaviour.\n";
+        std::exit(EXIT_FAILURE);
+      }
     }
   }
 
@@ -270,84 +310,123 @@ DecisionTree construct(
   for (size_t i = 0; i < params.columns_count; i++)
     cons_data.used_columns[params.columns_to_exclude[i]] = true;
 
-  for (size_t i = 0; i < table.rows; i++)
+  for (size_t i = 0; i < rows; i++)
     cons_data.rows[i] = i;
 
-  construct(tree, MutableTreeData { *tree.root, 0, table.rows }, cons_data);
+  construct(tree, MutableTreeData { *tree.root, 0, rows }, cons_data);
 
   delete[] data;
 
   return tree;
 }
 
-void clean(DecisionTree::Node &root)
+void clean(const DecisionTree &self)
 {
-  for (size_t i = 0; i < root.count; i++)
-    clean(root.children[i]);
-
-  delete[] root.children;
+  clean(self.categories);
+  delete[] self.pool.data;
 }
 
-void clean(DecisionTree &self)
-{
-  for (size_t i = 0; i < self.count; i++)
-  {
-    self.categories[i]->clean();
-    delete[] self.names[i].data;
-  }
-
-  delete[] self.categories;
-  delete[] self.names;
-
-  clean(*self.root);
-  delete self.root;
-}
-
-size_t classify(const DecisionTree &self, const Attribute::Value *sample)
+size_t classify(const DecisionTree &self, const Table &samples, size_t row)
 {
   const DecisionTree::Node *curr = self.root;
 
   while (curr->count > 0)
   {
-    size_t const category =
-      self.categories[curr->column]->to_category(sample[curr->column]);
+    if (curr->column >= self.categories.count)
+      return INVALID_CATEGORY;
+
+    size_t const category = to_category(
+      self.categories.data[curr->column],
+      get(samples, row, curr->column)
+      );
 
     if (category < curr->count)
       curr = curr->children + category;
     else
-      return size_t(-1);
+      return INVALID_CATEGORY;
   }
 
   return curr->column;
 }
 
-size_t *classify(const DecisionTree &self, const TableRowMajor &samples)
+size_t *classify(const DecisionTree &self, Table &samples)
 {
-  assert(self.count == samples.cols);
+  if (self.categories.count != samples.cols)
+  {
+    std::cerr << "ERROR: the number of columns in decision tree doesn't match "
+      "the number of columns in samples.\n";
+    std::exit(EXIT_FAILURE);
+  }
+
+  for (size_t i = 0; i < samples.cols; i++)
+  {
+    if (self.categories.data[i].type == AttributeType::INTERVAL)
+    {
+      bool const promoted_everything = promote(
+        samples,
+        AttributeType::INTERVAL,
+        { 0, samples.rows, i, i + 1 }
+        );
+
+      if (!promoted_everything)
+      {
+        std::cerr << "ERROR: couldn't promote column "
+                  << i
+                  << " to type `Interval`.\n";
+        std::exit(EXIT_FAILURE);
+      }
+    }
+    else
+    {
+      if (!have_same_type(samples, { 0, samples.rows, i, i + 1 }))
+      {
+        std::cerr << "ERROR: column "
+                  << i
+                  << " has values of different types.\n";
+        std::exit(EXIT_FAILURE);
+      }
+    }
+  }
 
   size_t *const classes = new size_t[samples.rows];
 
   for (size_t i = 0; i < samples.rows; i++)
-    classes[i] = classify(self, samples.data + i * samples.cols);
+    classes[i] = classify(self, samples, i);
 
   return classes;
 }
 
 void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
 {
-  if (node.count != 0)
+  auto const print_from_category =
+    [&self, &node](const Category &category, size_t category_as_int) -> void
+    {
+      auto category_class = from_category(category, category_as_int);
+
+      if (!category_class.second)
+        std::cout << "(null)";
+      else
+        std::cout << to_string(category_class.first).data;
+    };
+
+  if (node.count > 0)
   {
     std::cout << '\n';
     putsn(" ", offset);
-    std::cout << '<' << self.names[node.column].data
-              << " (" << node.samples << ")>\n";
+
+    if (self.names != nullptr && node.column < self.categories.count)
+      std::cout << '<' << self.names[node.column].data;
+    else
+      std::cout << "<unnamed";
+
+    std::cout << " (" << node.samples << ")>\n";
 
     offset += TAB_WIDTH;
 
     for (size_t i = 0; i < node.count; i++)
     {
       putsn(" ", offset);
-      self.categories[node.column]->print_from_category(i);
+      print_from_category(self.categories.data[node.column], i);
       std::cout << ':';
 
       print(self, node.children[i], offset);
@@ -356,7 +435,7 @@ void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
   else
   {
     std::cout << ' ';
-    self.categories[self.goal]->print_from_category(node.column);
+    print_from_category(self.categories.data[self.goal], node.column);
     std::cout << " ("
               << node.samples
               << ")\n";
@@ -366,9 +445,4 @@ void print(const DecisionTree &self, const DecisionTree::Node &node, int offset)
 void print(const DecisionTree &self)
 {
   print(self, *self.root, 0);
-}
-
-void print_goal_category(const DecisionTree &self, size_t category)
-{
-  self.categories[self.goal]->print_from_category(category);
 }

@@ -5,6 +5,10 @@ char *allocate_in_chunks(size_t *offsets, size_t count, ...);
 
 void putsn(const char *string, size_t count);
 
+bool is_number(const char *str);
+
+size_t read_zu(const char *&str);
+
 int64_t read_int64(const char *&str);
 
 double read_float64(const char *&str);

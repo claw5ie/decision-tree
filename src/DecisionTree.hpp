@@ -26,22 +26,25 @@ struct DecisionTree
     size_t columns_count;
   };
 
-  Category **categories;
-  String *names;
-  size_t count;
+  Categories categories;
   size_t goal;
   Node *root;
+  String *names;
+  MemoryPool pool;
 };
 
 DecisionTree construct(
-  const TableColumnMajor &table, const DecisionTree::Params &params
+  const Table &table,
+  const Table::Selection &sel,
+  const DecisionTree::Params &params
   );
 
-void clean(DecisionTree &self);
+void clean(const DecisionTree &self);
 
-void print_goal_category(const DecisionTree &self, size_t category);
+std::pair<const Table::Cell, bool>
+from_class(const DecisionTree &self, size_t category);
 
-size_t *classify(const DecisionTree &self, const TableRowMajor &samples);
+size_t *classify(const DecisionTree &self, Table &samples);
 
 void print(const DecisionTree &self);
 

@@ -32,7 +32,7 @@ struct MutableTreeData
 };
 
 void construct(
-  const DecisionTree &self, const MutableTreeData &mut, ConstTreeData &cons
+  DecisionTree &self, const MutableTreeData &mut, ConstTreeData &cons
   )
 {
   auto const compute_entropy_after_split =
@@ -154,7 +154,11 @@ void construct(
   size_t const category_count = self.categories.data[best_attribute].count;
 
   mut.node.column = best_attribute;
-  mut.node.children = new DecisionTree::Node[category_count];
+  mut.node.children = (DecisionTree::Node *)reserve_array(
+    self.pool,
+    sizeof (DecisionTree::Node),
+    category_count
+    );
   mut.node.count = category_count;
   mut.node.samples = mut.end - mut.start;
 

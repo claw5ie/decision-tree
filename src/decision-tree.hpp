@@ -28,28 +28,24 @@ struct StringComparator
 struct MemoryPool
 {
   char *data;
-  size_t size,
-    reserved;
+  size_t size, reserved;
 };
 
 struct Matzu
 {
   size_t *data;
-  size_t rows,
-    cols;
+  size_t rows, cols;
 };
 
 struct Interval
 {
-  double min,
-    max;
+  double min, max;
 };
 
 // "count" satisfies the equation "min + count * step == max"
 struct SearchInterval
 {
-  double min,
-    step;
+  double min, step;
   size_t count;
 };
 
@@ -59,21 +55,18 @@ struct SearchInterval
 // returned;
 
 enum AttributeType
-{
-  STRING,
-  INT64,
-  FLOAT64,
-  INTERVAL
-};
+  {
+    STRING,
+    INT64,
+    FLOAT64,
+    INTERVAL
+  };
 
 struct Table
 {
   struct Selection
   {
-    size_t row_beg,
-      row_end,
-      col_beg,
-      col_end;
+    size_t row_beg, row_end, col_beg, col_end;
   };
 
   struct Cell
@@ -90,8 +83,7 @@ struct Table
   };
 
   Cell *data;
-  size_t rows,
-    cols;
+  size_t rows, cols;
   MemoryPool pool;
 };
 

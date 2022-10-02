@@ -1,41 +1,41 @@
+#include "decision-tree.cpp"
+
 #include <iostream>
 #include <iomanip>
 #include <limits>
 #include <cstring>
 #include <cassert>
 
-#include "Table.hpp"
-#include "DecisionTree.hpp"
-
 #define INVALID_OPTION (std::numeric_limits<size_t>::max())
+
 
 Table::Selection read_selection(const char *&string)
 {
   auto read_interval =
     [&string](size_t &start, size_t &end) -> void
-    {
-      if (*string == '-')
       {
-        start = 0;
-        ++string;
+        if (*string == '-')
+        {
+          start = 0;
+          ++string;
 
-        if (*string != ',' && *string != '\0')
-          end = read_zu(string);
+          if (*string != ',' && *string != '\0')
+            end = read_zu(string);
+          else
+            end = std::numeric_limits<size_t>::max();
+        }
         else
-          end = std::numeric_limits<size_t>::max();
-      }
-      else
-      {
-        start = read_zu(string);
-        require_char(*string, '-');
-        string++;
+        {
+          start = read_zu(string);
+          require_char(*string, '-');
+          string++;
 
-        if (*string != ',' && *string != '\0')
-          end = read_zu(string);
-        else
-          end = std::numeric_limits<size_t>::max();
-      }
-    };
+          if (*string != ',' && *string != '\0')
+            end = read_zu(string);
+          else
+            end = std::numeric_limits<size_t>::max();
+        }
+      };
 
   Table::Selection sel = {
     0,
@@ -97,32 +97,32 @@ int main(int argc, char **argv)
 
   auto const find_option =
     [option_list](const char *arg) -> size_t
-    {
-      if (
-        !(arg[0] == '-' &&
-          ((std::isalpha(arg[1]) && arg[2] == '\0') ||
-           (arg[1] == '-' && std::isalpha(arg[2]))))
-        )
       {
-        return INVALID_OPTION;
-      }
-
-      for (size_t i = 0; i < sizeof(option_list) / sizeof(*option_list); i++)
-      {
-        auto &option = option_list[i];
-
         if (
-          arg[1] == option.short_opt ||
-          (option.long_opt != nullptr &&
-           !std::strcmp(arg + 2, option.long_opt))
+          !(arg[0] == '-' &&
+            ((std::isalpha(arg[1]) && arg[2] == '\0') ||
+             (arg[1] == '-' && std::isalpha(arg[2]))))
           )
         {
-          return i;
+          return INVALID_OPTION;
         }
-      }
 
-      return INVALID_OPTION;
-    };
+        for (size_t i = 0; i < sizeof(option_list) / sizeof(*option_list); i++)
+        {
+          auto &option = option_list[i];
+
+          if (
+            arg[1] == option.short_opt ||
+            (option.long_opt != nullptr &&
+             !std::strcmp(arg + 2, option.long_opt))
+            )
+          {
+            return i;
+          }
+        }
+
+        return INVALID_OPTION;
+      };
 
   size_t threshold = 3;
   const char *data = nullptr;

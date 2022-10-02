@@ -4,8 +4,8 @@
 #include <cstring>
 #include <cassert>
 
-#include "src/Table.hpp"
-#include "src/DecisionTree.hpp"
+#include "Table.hpp"
+#include "DecisionTree.hpp"
 
 #define INVALID_OPTION (std::numeric_limits<size_t>::max())
 

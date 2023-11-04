@@ -1,176 +1,282 @@
-#include "decision-tree.hpp"
-
-#include <iostream>
-#include <fstream>
-#include <cstring>
-#include <cassert>
-
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
-
-using namespace std;
-
-bool
-operator<(const String &left, const String &right)
-{
-  return strcmp(left.data, right.data) < 0;
-}
-
-char *
+std::string
 read_entire_file(const char *filepath)
 {
-  ifstream file(filepath);
+  std::ifstream file(filepath);
+  std::string result;
 
   if (!file.is_open())
-    abort();
-
-  size_t file_size;
+    {
+      fprintf(stderr, "error: couldn't open '%s'.", filepath);
+      exit(EXIT_FAILURE);
+    }
 
   {
     struct stat stats;
-
     if (stat(filepath, &stats) == -1)
-      abort();
-
-    file_size = stats.st_size;
+      goto report_error;
+    result.resize(stats.st_size + 1);
   }
 
-  char *file_data = new char[file_size + 1];
-
-  file.read(file_data, file_size);
-  file_data[file_size] = '\0';
+  file.read(&result[0], result.size() - 1);
+  result.back() = '\0';
   file.close();
 
-  return file_data;
+  return result;
+
+ report_error:
+  std::cerr << strerror(errno);
+  exit(EXIT_FAILURE);
 }
 
 Table
-read_csv(const char *filepath)
+parse_csv(const char *filepath)
 {
-  char *const file_data = read_entire_file(filepath);
+  auto table = Table{ };
+  auto t = Tokenizer{ };
+  t.filepath = filepath;
+  t.source = read_entire_file(filepath);
 
-  Table table = { nullptr, 1, 1, { } };
+  size_t cells_in_row = 0;
 
-  {
-    const char *at = file_data;
+  if (t.peek() == Token_New_Line)
+    t.advance();
 
-    while (*at != '\n' && *at != '\0')
-      table.cols += *at++ == ',';
-
-    while (*at != '\0')
-      table.rows += *at++ == '\n';
-  }
-
-  table.data = new TableCell[table.rows * table.cols];
-
-  size_t total_count = 0, elems_on_row = 0;
-  const char *at = file_data;
-
-  while (true)
+  while (t.peek() != Token_End_Of_File)
     {
-      TableCell cell;
+      auto token = t.grab();
+      t.advance();
 
-      if (isdigit(*at))
+      switch (token.type)
         {
-          i64 value = 0;
+        case Token_Integer:
+          {
+            i64 value = 0;
+            for (auto ch: token.text)
+              value = 10 * value + (ch - '0');
 
-          do
-            value = 10 * value + (*at++ - '0');
-          while (isdigit(*at));
+            auto cell = TableCell{ };
+            cell.type = Table_Cell_Integer;
+            cell.as.integer = value;
+            table.data.push_back(cell);
+            ++cells_in_row;
 
-          if (*at == '.')
-            {
-              if (!isdigit(*++at))
-                abort();
+            t.expect_comma_or_new_line();
+          }
 
-              f64 frac = 0, powah = 1;
+          break;
+        case Token_Decimal:
+          {
+            i64 integral_part = 0;
+            f64 fractional_part = 0;
+            f64 pow10 = 0.1;
 
-              do
-                frac += (*at++ - '0') * (powah /= 10);
-              while (isdigit(*at));
+            size_t i = 0;
+            auto text = token.text;
+            for (; i < text.size() && text[i] != '.'; i++)
+              integral_part = 10 * integral_part + (text[i] - '0');
 
-              cell.type = Table_Cell_Decimal;
-              cell.as.decimal = value + frac;
-            }
-          else
-            {
-              cell.type = Table_Cell_Integer;
-              cell.as.integer = value;
-            }
-        }
-      else if (isalpha(*at))
-        {
-          String str;
-          str.size = 1;
+            for (++i; i < text.size(); i++, pow10 /= 10)
+              fractional_part += pow10 * (text[i] - '0');
 
-          for (char ch = at[str.size];
-               isalnum(ch) || ch == '-' || ch == '_';
-               ch = at[++str.size])
-            ;
+            auto cell = TableCell{ };
+            cell.type = Table_Cell_Decimal;
+            cell.as.decimal = integral_part + fractional_part;
+            table.data.push_back(cell);
+            ++cells_in_row;
 
-          str.data = new char[str.size + 1];
-          memcpy(str.data, at, str.size);
-          str.data[str.size] = '\0';
+            t.expect_comma_or_new_line();
+          }
 
-          at += str.size;
+          break;
+        case Token_String:
+          {
+            auto [it, _] = table.string_pool.emplace(token.text);
+            auto cell = TableCell{ };
+            cell.type = Table_Cell_String;
+            cell.as.string = *it;
+            table.data.push_back(cell);
+            ++cells_in_row;
 
-          table.pool.emplace(str, table.pool.size());
+            t.expect_comma_or_new_line();
+          }
 
-          cell.type = Table_Cell_String;
-          cell.as.string = { str.data, str.size };
-        }
-      else
-        assert(false && "invalid token");
+          break;
+        case Token_Comma:
+          {
+            PRINT_ERROR0(t.filepath, token.line_info, "unexpected ','.");
+            exit(EXIT_FAILURE);
+          }
 
-      ++elems_on_row;
-      table.data[total_count++] = cell;
+          break;
+        case Token_New_Line:
+          {
+            if (table.cols == 0)
+              {
+                // Columns count should only be zero on first iteration.
+                assert(cells_in_row > 0);
+                table.cols = cells_in_row;
+              }
+            else if (cells_in_row != table.cols)
+              {
+                PRINT_ERROR(t.filepath, token.line_info, "expected %zu row(s), but got %zu.", table.cols, cells_in_row);
+                exit(EXIT_FAILURE);
+              }
 
-      if (elems_on_row < table.cols)
-        assert(*at++ == ',');
-      else if (total_count == table.rows * table.cols)
-        {
-          assert(*at == '\0');
+            ++table.rows;
+            cells_in_row = 0;
+          }
+
+          break;
+        case Token_End_Of_File:
+          UNREACHABLE();
           break;
         }
-      else
-        {
-          // Elements are read one by one, so we can't overshoot.
-          // That is, elements on single row can't be more than
-          // the columns of table.
-          assert(*at++ == '\n');
-          elems_on_row = 0;
-        }
     }
-
-  delete[] file_data;
 
   return table;
 }
 
-void
-print(const Table *t)
+CategoryType
+cell_type_to_category_type(TableCellType type)
 {
-  for (size_t i = 0; i < t->rows; i++)
+  switch (type)
     {
-      for (size_t j = 0; j < t->cols; j++)
+    case Table_Cell_Integer: return Category_Of_Integers;
+    case Table_Cell_Decimal: return Category_Of_Decimals;
+    case Table_Cell_String:  return Category_Of_Strings;
+    }
+
+  UNREACHABLE();
+}
+
+SubdividedInterval
+bucketize(f64 min, f64 max, size_t count)
+{
+  auto result = SubdividedInterval{};
+  result.min = min;
+  result.step = (max - min) / count;
+  result.count = count;
+
+  return result;
+}
+
+// Moves the string pool from table.
+CategorizedTable
+categorize(Table &table)
+{
+  assert(table.cols >= 3 && table.rows >= 2);
+
+  CategorizedTable ct;
+  ct.cols = table.cols - 1;
+  ct.rows = table.rows - 1;
+  ct.data.reserve(ct.cols);
+  ct.labels.reserve(ct.cols);
+
+  // Extract columns name.
+  for (size_t i = 1; i < table.cols; i++)
+    ct.labels.push_back(table.grab(0, i).stringify());
+
+  for (size_t i = 1; i < table.cols; i++)
+    {
+      switch (table.grab(1, i).type)
         {
-          auto *cell = &t->data[i * t->cols + j];
+        case Table_Cell_Integer:
+          {
+            std::map<i64, CategoryId> to;
+            i64 min = INT64_MAX, max = INT64_MIN;
 
-          switch (cell->type)
-            {
-            case Table_Cell_Integer:
-              cout << cell->as.integer;
-              break;
-            case Table_Cell_Decimal:
-              cout << cell->as.decimal;
-              break;
-            case Table_Cell_String:
-              cout << cell->as.string.data;
-              break;
-            }
+            for (size_t j = 1; j < table.rows; j++)
+              {
+                auto &cell = table.grab(j, i);
 
-          cout << (j + 1 < t->cols ? ',' : '\n');
+                if (cell.type != Table_Cell_Integer)
+                  {
+                    exit(EXIT_FAILURE);
+                  }
+
+                min = std::min(min, cell.as.integer);
+                max = std::max(max, cell.as.integer);
+
+                if (to.size() <= MAX_CATEGORIES_FOR_INTEGERS)
+                  to.emplace(cell.as.integer, to.size());
+              }
+
+            if (to.size() > MAX_CATEGORIES_FOR_INTEGERS)
+              {
+                auto category = Category{ Category_Of_Decimals };
+                category.as.decimals.interval = bucketize(min, max, BINS_COUNT);
+                ct.data.push_back(std::move(category));
+              }
+            else
+              {
+                std::vector<i64> from;
+                from.resize(to.size());
+
+                for (auto &[key, id]: to)
+                  from[id] = key;
+
+                auto category = Category{ Category_Of_Integers };
+                category.as.integers.to = std::move(to);
+                category.as.integers.from = std::move(from);
+                ct.data.push_back(std::move(category));
+              }
+          }
+
+          break;
+        case Table_Cell_Decimal:
+          {
+            f64 min = DBL_MAX, max = -DBL_MAX;
+
+            for (size_t j = 1; j < table.rows; j++)
+              {
+                auto &cell = table.grab(j, i);
+
+                if (cell.type != Table_Cell_Decimal)
+                  {
+                    exit(EXIT_FAILURE);
+                  }
+
+                min = std::min(min, cell.as.decimal);
+                max = std::max(max, cell.as.decimal);
+              }
+
+            auto category = Category{ Category_Of_Decimals };
+            category.as.decimals.interval = bucketize(min, max, BINS_COUNT);
+            ct.data.push_back(std::move(category));
+          }
+
+          break;
+        case Table_Cell_String:
+          {
+            std::map<std::string, CategoryId> to;
+
+            for (size_t j = 1; j < table.rows; j++)
+              {
+                auto &cell = table.grab(j, i);
+
+                if (cell.type != Table_Cell_String)
+                  {
+                    exit(EXIT_FAILURE);
+                  }
+
+                to.emplace(cell.as.string, to.size());
+              }
+
+            std::vector<std::string_view> from;
+            from.resize(to.size());
+
+            for (auto &[key, id]: to)
+              from[id] = key;
+
+            auto category = Category{ Category_Of_Strings };
+            category.as.strings.to = std::move(to);
+            category.as.strings.from = std::move(from);
+            ct.data.push_back(std::move(category));
+          }
+
+          break;
         }
     }
+
+  return ct;
 }

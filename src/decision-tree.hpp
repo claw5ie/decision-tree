@@ -60,7 +60,7 @@ struct Tokenizer
   uint8_t token_count = 0;
   LineInfo line_info;
   const char *filepath;
-  std::string source;
+  std::string_view source;
 
   TokenType peek()
   {
@@ -241,9 +241,9 @@ struct Table
 
   void print()
   {
-    std::cout << "Rows: " << rows;
-    std::cout << "\nColumns:    " << cols;
-    std::cout << '\n';
+    std::cout << "Rows:    " << rows
+              << "\nColumns: " << cols
+              << '\n';
 
     for (size_t i = 0; i < rows; i++)
       {
@@ -561,15 +561,15 @@ struct DecisionTreeNode
   CategoryId category;
   size_t sample_count;
 
-  void print(Categories *categories, size_t offset)
+  void print(Categories &categories, size_t offset)
   {
     for (size_t i = offset; i-- > 0; )
       std::cout << ' ';
 
     if (!children.empty())
-      std::cout << "<" << categories->labels[column_index] << " " << sample_count << ">\n";
+      std::cout << "<" << categories.labels[column_index] << " " << sample_count << ">\n";
     else
-      std::cout << "'" << categories->data[column_index].to_string(category) << "' " << sample_count << '\n';
+      std::cout << "'" << categories.data[column_index].to_string(category) << "' " << sample_count << '\n';
 
     for (auto &child: children)
       child.print(categories, offset + 4);
@@ -582,12 +582,47 @@ struct DecisionTree
   Categories *categories;
   size_t goal_index;
 
+  CategoryId classify(TableCell *data, size_t count)
+  {
+    // Account for goal column.
+    assert(count + 1 >= categories->cols);
+
+    auto node = root.get();
+
+    do
+      {
+        if (node->children.empty())
+          return node->category;
+        else
+          {
+            assert(node->column_index < count);
+            auto column = node->column_index;
+            auto category = categories->data[column].to_category(data[column]);
+
+            if (category == INVALID_CATEGORY_ID)
+              return INVALID_CATEGORY_ID;
+
+            node = &node->children[category];
+          }
+      }
+    while (true);
+
+    UNREACHABLE();
+  }
+
+  std::string classify_as_string(TableCell *data, size_t count)
+  {
+    auto category = classify(data, count);
+    return categories->data[goal_index].to_string(category);
+  }
+
   void print()
   {
-    root->print(categories, 0);
+    root->print(*categories, 0);
   }
 };
 
+// Data needed to build decision tree.
 struct DecisionTreeBuildData
 {
   Flattened2DArray<CategoryId> table;
@@ -600,6 +635,7 @@ struct DecisionTreeBuildData
   size_t sample_count_threshold;
 };
 
+// Node info and sample range for the node that needs to be processed.
 struct DecisionTreeBuildDataNode
 {
   DecisionTreeBuildDataNode *parent;

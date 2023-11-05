@@ -29,12 +29,12 @@ read_entire_file(const char *filepath)
 }
 
 Table
-parse_csv(const char *filepath)
+parse_csv_from_string(const char *filepath, std::string &source)
 {
   auto table = Table{ };
   auto t = Tokenizer{ };
   t.filepath = filepath;
-  t.source = read_entire_file(filepath);
+  t.source = source;
 
   size_t cells_in_row = 0;
 
@@ -134,6 +134,28 @@ parse_csv(const char *filepath)
     }
 
   return table;
+}
+
+Table
+parse_csv_from_file(const char *filepath)
+{
+  auto string = read_entire_file(filepath);
+  return parse_csv_from_string(filepath, string);
+}
+
+Table
+parse_csv_from_stdin()
+{
+  auto string = std::string{ };
+  auto buffer = std::string{ };
+
+  while (std::getline(std::cin, buffer))
+    {
+      string.append(buffer);
+      string.push_back('\n');
+    }
+
+  return parse_csv_from_string("<stdin>", string);
 }
 
 CategoryType

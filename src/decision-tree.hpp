@@ -7,6 +7,27 @@
 
 #define MAX_CATEGORIES_FOR_INTEGERS 7
 #define BINS_COUNT 4
+#define SAMPLE_COUNT_THRESHOLD 3
+
+template<typename T>
+struct Flattened2DArray
+{
+  std::vector<T> data;
+  size_t rows, cols;
+
+  void resize(size_t rows, size_t cols)
+  {
+    this->rows = rows;
+    this->cols = cols;
+    data.resize(rows * cols);
+  }
+
+  T &grab(size_t row, size_t col)
+  {
+    assert(row < rows && col < cols);
+    return data[row * cols + col];
+  }
+};
 
 struct LineInfo
 {
@@ -255,6 +276,7 @@ struct SubdividedInterval
 };
 
 using CategoryId = size_t;
+constexpr CategoryId INVALID_CATEGORY_ID = std::numeric_limits<CategoryId>::max();
 
 struct CategoryOfIntegers
 {
@@ -351,9 +373,134 @@ struct Category
         break;
       }
   }
+
+  size_t category_count()
+  {
+    switch (type)
+      {
+      case Category_Of_Integers:
+        return as.integers.to.size();
+      case Category_Of_Decimals:
+        return as.decimals.interval.count;
+      case Category_Of_Strings:
+        return as.strings.to.size();
+      }
+
+    UNREACHABLE();
+  }
+
+  // Returns sentinel value if couldn't convert to category.
+  CategoryId to_category(TableCell &cell)
+  {
+    switch (type)
+      {
+      case Category_Of_Integers:
+        {
+          if (cell.type != Table_Cell_Integer)
+            return INVALID_CATEGORY_ID;
+
+          auto it = as.integers.to.find(cell.as.integer);
+
+          if (it == as.integers.to.end())
+            return INVALID_CATEGORY_ID;
+
+          auto &[_, id] = *it;
+
+          return id;
+        }
+
+        break;
+      case Category_Of_Decimals:
+        {
+          f64 value = 0;
+
+          switch (cell.type)
+            {
+            case Table_Cell_Integer:
+              value = cell.as.integer;
+              break;
+            case Table_Cell_Decimal:
+              value = cell.as.decimal;
+              break;
+            case Table_Cell_String:
+              return INVALID_CATEGORY_ID;
+              break;
+            }
+
+          auto interval = as.decimals.interval;
+          auto curr = interval.min, next = curr + interval.step;
+          // Could binary search here.
+          CategoryId i = 0;
+          for (; i + 1 < interval.count; i++)
+            {
+              if (curr <= value && value < next)
+                return i;
+
+              curr = next;
+              next += interval.step;
+            }
+
+          // Should use epsilon?
+          return value <= next ? i : INVALID_CATEGORY_ID;
+        }
+
+        break;
+      case Category_Of_Strings:
+        {
+          if (cell.type != Table_Cell_String)
+            return INVALID_CATEGORY_ID;
+
+          auto it = as.strings.to.find(std::string{ cell.as.string });
+
+          if (it == as.strings.to.end())
+            return INVALID_CATEGORY_ID;
+
+          auto &[_, id] = *it;
+
+          return id;
+        }
+
+        break;
+      }
+
+    UNREACHABLE();
+  }
+
+  CategoryId to_category_no_fail(TableCell &cell)
+  {
+    auto result = to_category(cell);
+    assert(result != INVALID_CATEGORY_ID);
+    return result;
+  }
+
+  std::string to_string(CategoryId id)
+  {
+    switch (type)
+      {
+      case Category_Of_Integers:
+        return std::to_string(as.integers.from[id]);
+      case Category_Of_Decimals:
+        {
+          auto interval = as.decimals.interval;
+          auto curr = interval.min + id * interval.step;
+          auto result = std::string{ };
+          result.push_back('[');
+          result.append(std::to_string(curr));
+          result.push_back(',');
+          result.append(std::to_string(curr + interval.step));
+          result.push_back(']');
+
+          return result;
+        }
+      case Category_Of_Strings:
+        return std::string{ as.strings.from[id] };
+      }
+
+    UNREACHABLE();
+  }
 };
 
-struct CategorizedTable
+struct Categories
 {
   std::vector<Category> data;
   std::vector<std::string> labels;
@@ -403,6 +550,61 @@ struct CategorizedTable
           }
       }
   }
+};
+
+constexpr size_t INVALID_COLUMN_INDEX = (size_t)-1;
+
+struct DecisionTreeNode
+{
+  std::vector<DecisionTreeNode> children;
+  size_t column_index;
+  CategoryId category;
+  size_t sample_count;
+
+  void print(Categories *categories, size_t offset)
+  {
+    for (size_t i = offset; i-- > 0; )
+      std::cout << ' ';
+
+    if (!children.empty())
+      std::cout << "<" << categories->labels[column_index] << " " << sample_count << ">\n";
+    else
+      std::cout << "'" << categories->data[column_index].to_string(category) << "' " << sample_count << '\n';
+
+    for (auto &child: children)
+      child.print(categories, offset + 4);
+  }
+};
+
+struct DecisionTree
+{
+  std::unique_ptr<DecisionTreeNode> root;
+  Categories *categories;
+  size_t goal_index;
+
+  void print()
+  {
+    root->print(categories, 0);
+  }
+};
+
+struct DecisionTreeBuildData
+{
+  Flattened2DArray<CategoryId> table;
+  Flattened2DArray<size_t> samples_matrix;
+  std::vector<size_t> front_samples_count;
+  std::vector<size_t> back_samples_count;
+
+  std::vector<bool> used_columns;
+  std::vector<size_t> row_indices;
+  size_t sample_count_threshold;
+};
+
+struct DecisionTreeBuildDataNode
+{
+  DecisionTreeBuildDataNode *parent;
+  DecisionTreeNode *to_fill;
+  size_t *start_row, *end_row;
 };
 
 #endif // DECISION_TREE_HPP

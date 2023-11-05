@@ -4,7 +4,11 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <memory>
+#include <limits>
+#include <algorithm>
 
+#include <cmath>
 #include <cstring>
 #include <cstdint>
 #include <cassert>
@@ -25,6 +29,8 @@ main(int argc, char **argv)
 {
   auto table = parse_csv(argc > 1 ? argv[1] : "datasets/test.csv");
   table.print();
-  auto ctable = categorize(table);
-  ctable.print();
+  auto categories = categorize(table);
+  categories.print();
+  auto dt = build_decision_tree(table, categories);
+  dt.print();
 }

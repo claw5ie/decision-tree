@@ -1,8 +1,8 @@
 std::string
 read_entire_file(const char *filepath)
 {
-  std::ifstream file(filepath);
-  std::string result;
+  auto file = std::ifstream{ filepath };
+  auto result = std::string{ };
 
   if (!file.is_open())
     {
@@ -203,7 +203,7 @@ categorize(Table &table)
         {
         case Table_Cell_Integer:
           {
-            std::map<i64, CategoryId> to;
+            auto to = std::map<i64, CategoryId>{ };
             i64 min = INT64_MAX, max = INT64_MIN;
 
             for (size_t row = 1; row < table.rows; row++)
@@ -230,7 +230,7 @@ categorize(Table &table)
               }
             else
               {
-                std::vector<i64> from;
+                auto from = std::vector<i64>{ };
                 from.resize(to.size());
 
                 for (auto &[key, id]: to)
@@ -269,7 +269,7 @@ categorize(Table &table)
           break;
         case Table_Cell_String:
           {
-            std::map<std::string, CategoryId> to;
+            auto to = std::map<std::string, CategoryId>{ };
 
             for (size_t row = 1; row < table.rows; row++)
               {
@@ -283,7 +283,7 @@ categorize(Table &table)
                 to.emplace(cell.as.string, to.size());
               }
 
-            std::vector<std::string_view> from;
+            auto from = std::vector<std::string_view>{ };
             from.resize(to.size());
 
             for (auto &[key, id]: to)

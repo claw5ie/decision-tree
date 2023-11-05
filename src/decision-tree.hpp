@@ -578,6 +578,12 @@ struct DecisionTreeNode
 
 struct DecisionTree
 {
+  struct ClassifyResult
+  {
+    std::string string;
+    bool is_ok;
+  };
+
   std::unique_ptr<DecisionTreeNode> root;
   Categories *categories;
   size_t goal_index;
@@ -610,10 +616,21 @@ struct DecisionTree
     UNREACHABLE();
   }
 
-  std::string classify_as_string(TableCell *data, size_t count)
+  ClassifyResult classify_as_string(TableCell *data, size_t count)
   {
     auto category = classify(data, count);
-    return categories->data[goal_index].to_string(category);
+    auto result = ClassifyResult{ };
+    result.is_ok = true;
+
+    if (category == INVALID_CATEGORY_ID)
+      {
+        result.is_ok = false;
+        return result;
+      }
+
+    result.string = categories->data[goal_index].to_string(category);
+
+    return result;
   }
 
   void print()

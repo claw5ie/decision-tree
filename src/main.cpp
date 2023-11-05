@@ -40,7 +40,10 @@ main(int argc, char **argv)
   for (size_t row = 0; row < samples.rows; row++)
     {
       auto row_ptr = &samples.grab(row, 0);
-      auto category = dt.classify_as_string(row_ptr, samples.cols);
-      std::cout << category << '\n';
+      auto [category, is_ok] = dt.classify_as_string(row_ptr, samples.cols);
+      if (is_ok)
+        std::cout << row << ": " << category << '\n';
+      else
+        std::cout << row << ": " << "Couldn't classify\n";
     }
 }

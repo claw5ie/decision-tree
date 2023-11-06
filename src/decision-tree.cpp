@@ -1,362 +1,112 @@
-std::string
-read_entire_file(const char *filepath)
+#define SAMPLE_COUNT_THRESHOLD 3
+
+constexpr size_t INVALID_COLUMN_INDEX = (size_t)-1;
+
+struct DecisionTreeNode
 {
-  auto file = std::ifstream{ filepath };
-  auto result = std::string{ };
+  std::vector<DecisionTreeNode> children;
+  size_t column_index;
+  CategoryId category;
+  size_t sample_count;
 
-  if (!file.is_open())
-    {
-      fprintf(stderr, "error: couldn't open '%s'.", filepath);
-      exit(EXIT_FAILURE);
-    }
-
+  void print(Categories &categories, size_t offset)
   {
-    struct stat stats;
-    if (stat(filepath, &stats) == -1)
-      goto report_error;
-    result.resize(stats.st_size + 1);
+    for (size_t i = offset; i-- > 0; )
+      std::cout << ' ';
+
+    if (!children.empty())
+      std::cout << "<" << categories.labels[column_index] << " " << sample_count << ">\n";
+    else
+      std::cout << "'" << categories.data[column_index].to_string(category) << "' " << sample_count << '\n';
+
+    for (auto &child: children)
+      child.print(categories, offset + 4);
+  }
+};
+
+struct DecisionTree
+{
+  struct ClassifyResult
+  {
+    std::string string;
+    bool is_ok;
+  };
+
+  std::unique_ptr<DecisionTreeNode> root;
+  Categories *categories;
+  size_t goal_index;
+
+  CategoryId classify(TableCell *data, size_t count)
+  {
+    // Account for goal column.
+    assert(count + 1 >= categories->cols);
+
+    auto node = root.get();
+
+    do
+      {
+        if (node->children.empty())
+          return node->category;
+        else
+          {
+            assert(node->column_index < count);
+            auto column = node->column_index;
+            auto category = categories->data[column].to_category(data[column]);
+
+            if (category == INVALID_CATEGORY_ID)
+              return INVALID_CATEGORY_ID;
+
+            node = &node->children[category];
+          }
+      }
+    while (true);
+
+    UNREACHABLE();
   }
 
-  file.read(&result[0], result.size() - 1);
-  result.back() = '\0';
-  file.close();
+  ClassifyResult classify_as_string(TableCell *data, size_t count)
+  {
+    auto category = classify(data, count);
+    auto result = ClassifyResult{ };
+    result.is_ok = true;
 
-  return result;
+    if (category == INVALID_CATEGORY_ID)
+      {
+        result.is_ok = false;
+        return result;
+      }
 
- report_error:
-  std::cerr << strerror(errno);
-  exit(EXIT_FAILURE);
-}
+    result.string = categories->data[goal_index].to_string(category);
 
-Table
-parse_csv_from_string(const char *filepath, std::string &source)
+    return result;
+  }
+
+  void print()
+  {
+    root->print(*categories, 0);
+  }
+};
+
+// Data needed to build decision tree.
+struct DecisionTreeBuildData
 {
-  auto table = Table{ };
-  auto t = Tokenizer{ };
-  t.filepath = filepath;
-  t.source = source;
+  Flattened2DArray<CategoryId> table;
+  Flattened2DArray<size_t> samples_matrix;
+  std::vector<size_t> front_samples_count;
+  std::vector<size_t> back_samples_count;
 
-  size_t cells_in_row = 0;
+  std::vector<bool> used_columns;
+  std::vector<size_t> row_indices;
+  size_t sample_count_threshold;
+};
 
-  if (t.peek() == Token_New_Line)
-    t.advance();
-
-  while (t.peek() != Token_End_Of_File)
-    {
-      auto token = t.grab();
-      t.advance();
-
-      switch (token.type)
-        {
-        case Token_Integer:
-          {
-            i64 value = 0;
-            for (auto ch: token.text)
-              value = 10 * value + (ch - '0');
-
-            auto cell = TableCell{ };
-            cell.type = Table_Cell_Integer;
-            cell.as.integer = value;
-            table.data.push_back(cell);
-            ++cells_in_row;
-
-            t.expect_comma_or_new_line();
-          }
-
-          break;
-        case Token_Decimal:
-          {
-            i64 integral_part = 0;
-            f64 fractional_part = 0;
-            f64 pow10 = 0.1;
-
-            size_t i = 0;
-            auto text = token.text;
-            for (; i < text.size() && text[i] != '.'; i++)
-              integral_part = 10 * integral_part + (text[i] - '0');
-
-            for (++i; i < text.size(); i++, pow10 /= 10)
-              fractional_part += pow10 * (text[i] - '0');
-
-            auto cell = TableCell{ };
-            cell.type = Table_Cell_Decimal;
-            cell.as.decimal = integral_part + fractional_part;
-            table.data.push_back(cell);
-            ++cells_in_row;
-
-            t.expect_comma_or_new_line();
-          }
-
-          break;
-        case Token_String:
-          {
-            auto [it, _] = table.string_pool.emplace(token.text);
-            auto cell = TableCell{ };
-            cell.type = Table_Cell_String;
-            cell.as.string = *it;
-            table.data.push_back(cell);
-            ++cells_in_row;
-
-            t.expect_comma_or_new_line();
-          }
-
-          break;
-        case Token_Comma:
-          {
-            PRINT_ERROR0(t.filepath, token.line_info, "unexpected ','.");
-            exit(EXIT_FAILURE);
-          }
-
-          break;
-        case Token_New_Line:
-          {
-            if (table.cols == 0)
-              {
-                // Columns count should only be zero on first iteration.
-                assert(cells_in_row > 0);
-                table.cols = cells_in_row;
-              }
-            else if (cells_in_row != table.cols)
-              {
-                PRINT_ERROR(t.filepath, token.line_info, "expected %zu row(s), but got %zu.", table.cols, cells_in_row);
-                exit(EXIT_FAILURE);
-              }
-
-            ++table.rows;
-            cells_in_row = 0;
-          }
-
-          break;
-        case Token_End_Of_File:
-          UNREACHABLE();
-          break;
-        }
-    }
-
-  return table;
-}
-
-Table
-parse_csv_from_file(const char *filepath)
+// Node info and sample range for the node that needs to be processed.
+struct DecisionTreeBuildDataNode
 {
-  auto string = read_entire_file(filepath);
-  return parse_csv_from_string(filepath, string);
-}
-
-Table
-parse_csv_from_stdin()
-{
-  auto string = std::string{ };
-  auto buffer = std::string{ };
-
-  while (std::getline(std::cin, buffer))
-    {
-      string.append(buffer);
-      string.push_back('\n');
-    }
-
-  return parse_csv_from_string("<stdin>", string);
-}
-
-CategoryType
-cell_type_to_category_type(TableCellType type)
-{
-  switch (type)
-    {
-    case Table_Cell_Integer: return Category_Of_Integers;
-    case Table_Cell_Decimal: return Category_Of_Decimals;
-    case Table_Cell_String:  return Category_Of_Strings;
-    }
-
-  UNREACHABLE();
-}
-
-SubdividedInterval
-bucketize(f64 min, f64 max, size_t count)
-{
-  auto result = SubdividedInterval{};
-  result.min = min;
-  result.step = (max - min) / count;
-  result.count = count;
-
-  return result;
-}
-
-Categories
-categorize(Table &table)
-{
-  assert(table.cols >= 3 && table.rows >= 2);
-
-  auto ct = Categories{ };
-  ct.cols = table.cols - 1;
-  ct.rows = table.rows - 1;
-  ct.data.reserve(ct.cols);
-  ct.labels.reserve(ct.cols);
-
-  // Extract columns name.
-  for (size_t i = 1; i < table.cols; i++)
-    ct.labels.push_back(table.grab(0, i).stringify());
-
-  for (size_t col = 1; col < table.cols; col++)
-    {
-      switch (table.grab(1, col).type)
-        {
-        case Table_Cell_Integer:
-          {
-            auto to = std::map<i64, CategoryId>{ };
-            i64 min = INT64_MAX, max = INT64_MIN;
-
-            for (size_t row = 1; row < table.rows; row++)
-              {
-                auto &cell = table.grab(row, col);
-
-                if (cell.type != Table_Cell_Integer)
-                  {
-                    exit(EXIT_FAILURE);
-                  }
-
-                min = std::min(min, cell.as.integer);
-                max = std::max(max, cell.as.integer);
-
-                if (to.size() <= MAX_CATEGORIES_FOR_INTEGERS)
-                  to.emplace(cell.as.integer, to.size());
-              }
-
-            if (to.size() > MAX_CATEGORIES_FOR_INTEGERS)
-              {
-                auto category = Category{ Category_Of_Decimals };
-                category.as.decimals.interval = bucketize(min, max, BINS_COUNT);
-                ct.data.push_back(std::move(category));
-              }
-            else
-              {
-                auto from = std::vector<i64>{ };
-                from.resize(to.size());
-
-                for (auto &[key, id]: to)
-                  from[id] = key;
-
-                auto category = Category{ Category_Of_Integers };
-                category.as.integers.to = std::move(to);
-                category.as.integers.from = std::move(from);
-                ct.data.push_back(std::move(category));
-              }
-          }
-
-          break;
-        case Table_Cell_Decimal:
-          {
-            f64 min = DBL_MAX, max = -DBL_MAX;
-
-            for (size_t row = 1; row < table.rows; row++)
-              {
-                auto &cell = table.grab(row, col);
-
-                if (cell.type != Table_Cell_Decimal)
-                  {
-                    exit(EXIT_FAILURE);
-                  }
-
-                min = std::min(min, cell.as.decimal);
-                max = std::max(max, cell.as.decimal);
-              }
-
-            auto category = Category{ Category_Of_Decimals };
-            category.as.decimals.interval = bucketize(min, max, BINS_COUNT);
-            ct.data.push_back(std::move(category));
-          }
-
-          break;
-        case Table_Cell_String:
-          {
-            auto to = std::map<std::string, CategoryId>{ };
-
-            for (size_t row = 1; row < table.rows; row++)
-              {
-                auto &cell = table.grab(row, col);
-
-                if (cell.type != Table_Cell_String)
-                  {
-                    exit(EXIT_FAILURE);
-                  }
-
-                to.emplace(cell.as.string, to.size());
-              }
-
-            auto from = std::vector<std::string_view>{ };
-            from.resize(to.size());
-
-            for (auto &[key, id]: to)
-              from[id] = key;
-
-            auto category = Category{ Category_Of_Strings };
-            category.as.strings.to = std::move(to);
-            category.as.strings.from = std::move(from);
-            ct.data.push_back(std::move(category));
-          }
-
-          break;
-        }
-    }
-
-  return ct;
-}
-
-void build_decision_tree(DecisionTree &tree, DecisionTreeBuildDataNode &node, DecisionTreeBuildData &data);
-
-DecisionTree
-build_decision_tree(Table &table, Categories &categories)
-{
-  assert(categories.rows >= 1 && categories.cols >= 2);
-
-  size_t max_category_count = 0;
-  for (auto &category: categories.data)
-    max_category_count = std::max(category.category_count(), max_category_count);
-
-  auto tree = DecisionTree{ };
-  tree.root = std::make_unique<DecisionTreeNode>();
-  tree.categories = &categories;
-  tree.goal_index = categories.cols - 1;
-
-  auto categories_in_goal = categories.data[tree.goal_index].category_count();
-  auto data = DecisionTreeBuildData{ };
-  // Table is in column major order, so 'rows' and 'cols' are swapped.
-  data.table.resize(categories.cols, categories.rows);
-  data.samples_matrix.data.resize(max_category_count * categories_in_goal);
-  data.front_samples_count.resize(max_category_count);
-  data.back_samples_count.resize(max_category_count);
-
-  data.used_columns.resize(categories.cols);
-  data.row_indices.resize(categories.rows);
-  data.sample_count_threshold = SAMPLE_COUNT_THRESHOLD;
-
-  for (size_t col = 0; col < categories.cols; col++)
-    {
-      auto &category = categories.data[col];
-
-      for (size_t row = 0; row < categories.rows; row++)
-        {
-          // Add 1 to ignore first column and row.
-          auto &cell = table.grab(row + 1, col + 1);
-          data.table.grab(col, row) = category.to_category_no_fail(cell);
-        }
-    }
-
-  for (size_t i = 0; i < data.row_indices.size(); i++)
-    data.row_indices[i] = i;
-
-  data.used_columns[tree.goal_index] = true;
-
-  auto node = DecisionTreeBuildDataNode{ };
-  node.parent = nullptr;
-  node.to_fill = tree.root.get();
-  node.start_row = &data.row_indices.front();
-  node.end_row = &data.row_indices.back() + 1;
-
-  build_decision_tree(tree, node, data);
-
-  return tree;
-}
+  DecisionTreeBuildDataNode *parent;
+  DecisionTreeNode *to_fill;
+  size_t *start_row, *end_row;
+};
 
 f64
 compute_average_entropy_after_split(DecisionTree &tree, DecisionTreeBuildData &data, size_t column_index, size_t *start_row, size_t *end_row)
@@ -525,4 +275,58 @@ build_decision_tree(DecisionTree &tree, DecisionTreeBuildDataNode &node, Decisio
     }
 
   data.used_columns[best_column] = false;
+}
+
+DecisionTree
+build_decision_tree(Table &table, Categories &categories)
+{
+  assert(categories.rows >= 1 && categories.cols >= 2);
+
+  size_t max_category_count = 0;
+  for (auto &category: categories.data)
+    max_category_count = std::max(category.category_count(), max_category_count);
+
+  auto tree = DecisionTree{ };
+  tree.root = std::make_unique<DecisionTreeNode>();
+  tree.categories = &categories;
+  tree.goal_index = categories.cols - 1;
+
+  auto categories_in_goal = categories.data[tree.goal_index].category_count();
+  auto data = DecisionTreeBuildData{ };
+  // Table is in column major order, so 'rows' and 'cols' are swapped.
+  data.table.resize(categories.cols, categories.rows);
+  data.samples_matrix.data.resize(max_category_count * categories_in_goal);
+  data.front_samples_count.resize(max_category_count);
+  data.back_samples_count.resize(max_category_count);
+
+  data.used_columns.resize(categories.cols);
+  data.row_indices.resize(categories.rows);
+  data.sample_count_threshold = SAMPLE_COUNT_THRESHOLD;
+
+  for (size_t col = 0; col < categories.cols; col++)
+    {
+      auto &category = categories.data[col];
+
+      for (size_t row = 0; row < categories.rows; row++)
+        {
+          // Add 1 to ignore first column and row.
+          auto &cell = table.grab(row + 1, col + 1);
+          data.table.grab(col, row) = category.to_category_no_fail(cell);
+        }
+    }
+
+  for (size_t i = 0; i < data.row_indices.size(); i++)
+    data.row_indices[i] = i;
+
+  data.used_columns[tree.goal_index] = true;
+
+  auto node = DecisionTreeBuildDataNode{ };
+  node.parent = nullptr;
+  node.to_fill = tree.root.get();
+  node.start_row = &data.row_indices.front();
+  node.end_row = &data.row_indices.back() + 1;
+
+  build_decision_tree(tree, node, data);
+
+  return tree;
 }

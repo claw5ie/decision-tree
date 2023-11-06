@@ -21,7 +21,10 @@
 using i64 = int64_t;
 using f64 = double;
 
-#include "decision-tree.hpp"
+#include "utils.cpp"
+#include "tokenizer.cpp"
+#include "table.cpp"
+#include "categories.cpp"
 #include "decision-tree.cpp"
 
 int
